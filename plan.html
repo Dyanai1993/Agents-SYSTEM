@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Multi-Agent System Plan</title>
+<style>
+:root{--bg:#fff;--fg:#1d2330;--mut:#5b6475;--card:#f5f7fa;--line:#d9dee7;--acc:#2f6fed;--ok:#17803d;--warn:#b45309;--bad:#b42318;--code:#eef1f6}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--fg:#e6e9f0;--mut:#9aa3b5;--card:#1b2029;--line:#2c3342;--acc:#6b9bff;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--code:#222936}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px;display:grid;grid-template-columns:220px 1fr;gap:24px}
+@media(max-width:800px){.wrap{grid-template-columns:1fr}nav.toc{position:static!important}}
+nav.toc{position:sticky;top:12px;align-self:start;font-size:14px}
+nav.toc a{display:block;color:var(--mut);text-decoration:none;padding:3px 0}
+nav.toc a:hover{color:var(--acc)}
+h1{font-size:26px;margin:0 0 8px}
+.tldr{background:var(--card);border-left:4px solid var(--acc);padding:14px 16px;border-radius:8px;margin:12px 0 20px}
+.tldr ul{margin:6px 0 0 18px;padding:0}
+details{border:1px solid var(--line);border-radius:10px;margin:12px 0;background:var(--bg)}
+summary{cursor:pointer;padding:12px 14px;font-weight:600;list-style:none}
+summary::before{content:"▸ ";color:var(--acc)}
+details[open]>summary::before{content:"▾ "}
+.body{padding:0 14px 14px}
+.vis{background:var(--card);border-radius:8px;padding:10px;margin:8px 0;overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+th{background:var(--code)}
+pre,code{background:var(--code);border-radius:6px;font:13px/1.45 ui-monospace,monospace}
+pre{padding:10px;overflow-x:auto;margin:6px 0}
+code{padding:1px 4px}
+.tag{display:inline-block;font-size:12px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.dec{border:1px solid var(--acc);border-radius:8px;padding:10px 12px;margin:12px 0}
+.dec h4{margin:0 0 6px;font-size:15px}
+.opt{display:block;padding:6px 8px;border-radius:6px;margin:4px 0;cursor:pointer}
+.opt:hover{background:var(--card)}
+.opt small{display:block;color:var(--mut)}
+.rec{font-size:12px;color:var(--ok);font-weight:700}
+textarea{width:100%;min-height:50px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px;font:inherit}
+button.go{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:16px;cursor:pointer}
+#out{display:none;min-height:200px;margin-top:10px}
+ul.files{font-size:14px;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc"><strong>On this page</strong>
+<a href="#tldr">Result (TL;DR)</a>
+<a href="#s1">1 Billing safety</a>
+<a href="#s2">2 Runner and backends</a>
+<a href="#s3">3 State machine</a>
+<a href="#s4">4 Agents and models</a>
+<a href="#s5">5 Usage budget</a>
+<a href="#s6">6 Contracts and logs</a>
+<a href="#s7">7 Safety gates</a>
+<a href="#s8">8 Learning loop</a>
+<a href="#s9">9 Evals</a>
+<a href="#s10">10 Dashboard</a>
+<a href="#s11">11 Phases and repo</a>
+<a href="#files">Files read</a>
+<a href="#respond">Respond</a>
+</nav>
+<main>
+<h1>Multi-Agent Engineering System — Phase 0 plan</h1>
+<p style="color:var(--mut)">Date: 2026-11-03. No system code exists yet. Challenge every number. A number marked "(assumption)" is a guess.</p>
+
+<section class="tldr" id="tldr">
+<strong>Result when all phases are done</strong>
+<ul>
+<li>You type one task in plain language. A fixed state machine runs 3 core agents in sequence: Architect, Developer, Tester.</li>
+<li>Every run uses your Max login. The billing guard stops the run if an API key exists.</li>
+<li>You approve merge, deploy, delete and send actions in a local dashboard. The dashboard never calls an LLM.</li>
+<li>The system learns only through lessons that you approve and that pass the evals.</li>
+</ul>
+<p><strong>Important billing finding.</strong> Your premise is correct today: SDK and <code>claude -p</code> with a plan login use subscription limits. But since 2026-10-07 Max also gives monthly API credits. These work only with an API key. The plan ignores them, as you require. See step 1.</p>
+<p><strong>Important location finding.</strong> This repo (<code>investment-os</code>) is an unrelated app. The plan puts the system in <code>agent-system/</code>. See decision D8.</p>
+</section>
+
+<!-- STEP 1 -->
+<details id="s1" open><summary>1. The billing guard blocks 10 known paid-billing signals before every task and every agent call.</summary>
+<div class="body">
+<div class="vis">
+<table>
+<tr><th>Checked fact</th><th>Result</th><th>Source</th></tr>
+<tr><td>SDK and <code>claude -p</code> with plan login use subscription limits</td><td class="ok">Verified, updated 2026-10-07</td><td>support.claude.com article 15036540</td></tr>
+<tr><td>Separate "Agent SDK credit" (planned 2026-06-15)</td><td class="warn">Paused. Not active.</td><td>same article</td></tr>
+<tr><td>Max monthly API credits (new, 2026-10-07)</td><td class="warn">Need an API key from Console. Not used.</td><td>same article</td></tr>
+<tr><td>Plan login is for the owner's ordinary, individual use</td><td class="ok">Fits personal use</td><td>code.claude.com legal-and-compliance</td></tr>
+<tr><td>Can you read the remaining usage window by API?</td><td class="bad">No official way found</td><td>—</td></tr>
+<tr><td>Is "extra usage" on in your account?</td><td class="bad">Guard cannot read it. You must check by hand.</td><td>claude.ai settings</td></tr>
+</table>
+</div>
+<p>Guard checks, in order:</p>
+<pre>1. env has none of: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL,
+   CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY, AWS_BEARER_TOKEN_BEDROCK (+3 more)
+2. no apiKeyHelper in any settings.json (user, project, local)
+3. SDK init message reports the login source = claude.ai subscription
+4. any failure -> exit code 2, write alert event, run nothing</pre>
+<p>A unit test sets a fake key and proves the guard fails. The file <code>docs/billing-assumptions.md</code> is written already.</p>
+<p><strong>Risk:</strong> "ordinary individual usage" has no number. Long unattended loops may hit limits early. Sequential runs reduce this.</p>
+<div class="dec"><h4>D1. Should the system ever use the new Max API credits?</h4>
+<label class="opt"><input type="radio" name="D1" value="Never use them (no API key)" checked> Never. Keep the strict no-API-key rule. <span class="rec">recommended</span><small>+ Zero chance of silent billing. + Simple guard. − You lose free credits that exist.</small></label>
+<label class="opt"><input type="radio" name="D1" value="Later, as a third manual backend"> Later, as a third backend that you start by hand.<small>+ More capacity. − Needs a key in the environment. − Guard becomes complex.</small></label>
+<textarea data-note="D1" placeholder="Notes (optional)"></textarea></div>
+<div class="dec"><h4>D2. Where does the system run?</h4>
+<label class="opt"><input type="radio" name="D2" value="Your own computer" checked> On your own computer, after <code>claude login</code>. <span class="rec">recommended</span><small>+ Login stays on your device. + Dashboard opens on localhost. − Computer must be on for long runs.</small></label>
+<label class="opt"><input type="radio" name="D2" value="This cloud container"> In this cloud container.<small>+ Always on. − This container has <code>ANTHROPIC_BASE_URL</code> set, so the guard fails. − It would need your login stored in the container.</small></label>
+<textarea data-note="D2" placeholder="Notes (optional)"></textarea></div>
+<div class="dec"><h4>D3. Which Max tier do you have?</h4>
+<label class="opt"><input type="radio" name="D3" value="Max 5x"> Max 5x<small>Smaller window. Budget defaults will be lower.</small></label>
+<label class="opt"><input type="radio" name="D3" value="Max 20x"> Max 20x<small>Larger window.</small></label>
+<label class="opt"><input type="radio" name="D3" value="Not sure" checked> Not sure. Use low defaults and calibrate in Phase 1. <span class="rec">recommended</span><small>Safe start.</small></label>
+<textarea data-note="D3" placeholder="Notes (optional)"></textarea></div>
+</div></details>
+
+<!-- STEP 2 -->
+<details id="s2"><summary>2. One function, <code>run_agent()</code>, runs every agent, and a config switch changes the backend in 1 line.</summary>
+<div class="body">
+<div class="vis"><pre>def run_agent(role: str, input: dict, model: str, limits: Limits) -> AgentResult:
+    """Returns validated JSON + usage (tokens, turns, seconds)."""
+
+backends:
+  sdk   -> claude_agent_sdk.query(...)   # plan login, programmatic hooks and budgets
+  cli   -> subprocess: claude -p --output-format json --model ... --max-turns ...</pre></div>
+<ul>
+<li>Both backends return the same <code>AgentResult</code>. The orchestrator never knows which one ran.</li>
+<li>A contract test runs the same fake task on both backends. The result shape must match.</li>
+<li>Subagent files live in <code>.claude/agents/*.md</code> and go through git review.</li>
+</ul>
+<div class="dec"><h4>D4. Which language?</h4>
+<label class="opt"><input type="radio" name="D4" value="Python" checked> Python <span class="rec">recommended</span><small>+ Dashboard server with the standard library only (no build step). + Easy JSON schema checks. − None big.</small></label>
+<label class="opt"><input type="radio" name="D4" value="TypeScript"> TypeScript<small>+ Same language as your other repo. − Needs a build step and more dependencies.</small></label>
+<textarea data-note="D4" placeholder="Notes (optional)"></textarea></div>
+</div></details>
+
+<!-- STEP 3 -->
+<details id="s3"><summary>3. A plain script, not an LLM, moves each task through 9 main states and 3 end states.</summary>
+<div class="body">
+<div class="vis">
+<svg viewBox="0 0 900 130" width="100%" role="img" aria-label="State machine">
+<g font-size="12" fill="currentColor" text-anchor="middle">
+<g stroke="currentColor" fill="none">
+<rect x="5" y="40" width="70" height="30" rx="6"/><rect x="95" y="40" width="70" height="30" rx="6"/><rect x="185" y="40" width="70" height="30" rx="6"/><rect x="275" y="40" width="70" height="30" rx="6"/><rect x="365" y="40" width="80" height="30" rx="6"/><rect x="465" y="40" width="80" height="30" rx="6"/><rect x="565" y="40" width="80" height="30" rx="6"/><rect x="665" y="40" width="70" height="30" rx="6"/><rect x="755" y="40" width="70" height="30" rx="6"/>
+<path d="M75 55h20M165 55h20M255 55h20M345 55h20M445 55h20M545 55h20M645 55h20M735 55h20"/>
+<path d="M310 40 C310 5 230 5 230 40" stroke-dasharray="4 3"/>
+</g>
+<text x="40" y="60">intake</text><text x="130" y="60">plan</text><text x="220" y="60">build</text><text x="310" y="60">test</text><text x="405" y="60">security</text><text x="505" y="60">integrate</text><text x="605" y="60">deploy*</text><text x="700" y="60">review</text><text x="790" y="60">done</text>
+<text x="270" y="18">fix loop (max 3)</text>
+<text x="450" y="115" fill="#b42318">blocked · failed · paused  (reachable from any state)</text>
+<text x="605" y="90" fill="#b45309">* needs your approval</text>
+</g></svg></div>
+<ul>
+<li>State lives in <code>tasks/&lt;id&gt;/state.json</code>. Each step writes it first. A killed run resumes from it.</li>
+<li>The LLM part does only intake and routing doubts. All transitions are code.</li>
+<li>Skipped states (for example no integration) are marked <code>skipped</code>, not removed.</li>
+</ul>
+</div></details>
+
+<!-- STEP 4 -->
+<details id="s4"><summary>4. Three agents start in Phase 2, and the 6 other roles join only when a real task needs them.</summary>
+<div class="body">
+<div class="vis"><table>
+<tr><th>Role</th><th>Model</th><th>Tools</th><th>Phase</th></tr>
+<tr><td>Architect</td><td>Opus for complex design only. Sonnet for simple tasks.</td><td>Read, Grep, Write (plan only)</td><td>2</td></tr>
+<tr><td>Developer</td><td>Sonnet</td><td>Read, Edit, Write, Bash in worktree</td><td>2</td></tr>
+<tr><td>Tester (separate context)</td><td>Sonnet</td><td>Read, Bash, browser. No dev log.</td><td>2</td></tr>
+<tr><td>Orchestrator LLM part</td><td>Haiku</td><td>None</td><td>3</td></tr>
+<tr><td>Memory reviewer</td><td>Haiku</td><td>Read</td><td>4</td></tr>
+<tr><td>Integration, Security, DevOps, Research/Docs, Data</td><td>Sonnet (Haiku for log summaries)</td><td>Per role</td><td>5, one by one</td></tr>
+</table></div>
+<ul>
+<li>Escalate to Opus only after 2 failed fix loops (assumption), and only with your approval in the first version.</li>
+<li>Linters, type checks and test runners are scripts, not agents.</li>
+</ul>
+<div class="dec"><h4>D5. Can the Architect use Opus without asking?</h4>
+<label class="opt"><input type="radio" name="D5" value="Ask me first for every Opus call" checked> Ask first, for each Opus call. <span class="rec">recommended</span><small>+ You control the scarce window. − Small delay.</small></label>
+<label class="opt"><input type="radio" name="D5" value="Auto Opus when task is marked complex"> Auto, when the intake marks the task "complex".<small>+ Less supervision. − Opus can use the window fast.</small></label>
+<textarea data-note="D5" placeholder="Notes (optional)"></textarea></div>
+</div></details>
+
+<!-- STEP 5 -->
+<details id="s5"><summary>5. Each task stops at 3 fix loops, 2 re-plans, 40 agent calls (assumption) or 45 minutes (assumption).</summary>
+<div class="body">
+<div class="vis"><pre>// tasks/T-0007/budget.json
+{ "calls": 11, "call_cap": 40,
+  "fix_loops": 2, "fix_cap": 3,
+  "replans": 0, "replan_cap": 2,
+  "tokens_est": 184000,
+  "by_model": {"sonnet": 9, "haiku": 2, "opus": 0},
+  "limit_hits": [] }</pre></div>
+<ul>
+<li>The SDK result message gives real token counts per call. The ledger sums them.</li>
+<li>A limit error from the SDK or CLI is the ground truth. The system saves state and stops. It never retries in a tight loop.</li>
+<li>A task whose estimate is above the remaining window does not start. The system asks you.</li>
+<li>Results cache by input hash. Unchanged research, scans and tests do not run again.</li>
+<li><strong>Weak point:</strong> there is no official remaining-window number. The estimate can be wrong. Phase 1 calibrates it from real limit hits.</li>
+</ul>
+</div></details>
+
+<!-- STEP 6 -->
+<details id="s6"><summary>6. Agents exchange 7 JSON document types, and a validator rejects any bad document before the next agent starts.</summary>
+<div class="body">
+<div class="vis"><pre>// one line in logs/T-0007.jsonl  (schemas/event.schema.json)
+{"ts":"2026-11-03T19:40:02Z","task_id":"T-0007","run_id":"r12",
+ "agent":"tester","model":"sonnet","event_type":"message",
+ "from":"tester","to":"orchestrator","summary":"verdict=fail (2 tests)",
+ "payload_ref":"tasks/T-0007/test_report.json",
+ "tokens_estimate":9200,"status":"ok"}</pre></div>
+<table>
+<tr><th>Schema</th><th>Written by</th></tr>
+<tr><td>requirements, plan, dev_log entry, test_report</td><td>Orchestrator, Architect, Developer, Tester</td></tr>
+<tr><td>event, approval_request, approval_decision</td><td>Logger, Orchestrator, Dashboard</td></tr>
+</table>
+<p>Large payloads go to separate files. The event line holds only <code>payload_ref</code>. A timeline command (<code>make timeline TASK=T-0007</code>) prints the log in human form.</p>
+</div></details>
+
+<!-- STEP 7 -->
+<details id="s7"><summary>7. Six action types always stop for your approval, and agents work only inside a task worktree.</summary>
+<div class="body">
+<div class="vis"><table>
+<tr><th>Gate</th><th>How enforced</th></tr>
+<tr><td>Merge to main</td><td>Agents have no push rights to main. Script merges after the decision file says "approved".</td></tr>
+<tr><td>Deploy to production</td><td>Deploy script reads the decision file.</td></tr>
+<tr><td>Delete outside workspace</td><td>PreToolUse hook denies. Path allow-list.</td></tr>
+<tr><td>Send email or message</td><td>No such tools are granted.</td></tr>
+<tr><td>Spend money</td><td>No payment tools. Billing guard.</td></tr>
+<tr><td>Change credentials or permissions</td><td>Hook denies edits to settings and secret files.</td></tr>
+</table></div>
+<ul>
+<li>Secrets stay in environment variables. A pre-commit secret scan blocks bad commits.</li>
+<li>Web pages, files and tool output are data. The agent prompt says this. A failure test checks it in Phase 6.</li>
+</ul>
+<div class="dec"><h4>D6. Which sandbox?</h4>
+<label class="opt"><input type="radio" name="D6" value="Git worktree per task" checked> One git worktree per task, plus hooks. <span class="rec">recommended</span><small>+ Simple, cheap, easy to review. − Not a hard security wall.</small></label>
+<label class="opt"><input type="radio" name="D6" value="Docker container per task"> Docker container per task.<small>+ Stronger wall. − Docker needed. − Slower start. − Harder browser tests.</small></label>
+<textarea data-note="D6" placeholder="Notes (optional)"></textarea></div>
+</div></details>
+
+<!-- STEP 8 -->
+<details id="s8"><summary>8. No agent prompt changes without your approval and a green eval run.</summary>
+<div class="body">
+<div class="vis"><pre>task ends -> lesson in memory/inbox/*.md
+   -> reviewer (Haiku) clusters -> proposal.md (one change each)
+   -> YOU approve in dashboard
+   -> change applied in git branch
+   -> evals run -> no regression? keep : revert</pre></div>
+<ul>
+<li><code>memory/lessons.md</code> stays under 60 lines (assumption). A script retrieves at most 5 relevant lessons per task, by keyword match, no LLM.</li>
+<li>The review step runs only when 5 or more lessons wait (assumption).</li>
+</ul>
+</div></details>
+
+<!-- STEP 9 -->
+<details id="s9"><summary>9. Eight benchmark tasks measure the system, and each has a script that gives pass or fail.</summary>
+<div class="body">
+<div class="vis"><table>
+<tr><th>#</th><th>Task</th><th>Pass check (script)</th></tr>
+<tr><td>1</td><td>Static page with a form</td><td>Browser test finds the form and submits it</td></tr>
+<tr><td>2</td><td>API endpoint with tests</td><td>Hidden tests pass</td></tr>
+<tr><td>3</td><td>Bug fix in a given repo</td><td>Failing test turns green</td></tr>
+<tr><td>4</td><td>Data analysis of a small CSV</td><td>Report numbers match known answers</td></tr>
+<tr><td>5</td><td>Integration against a mock service</td><td>Contract test and retry test pass</td></tr>
+<tr><td>6</td><td>CLI tool</td><td>Golden-output test</td></tr>
+<tr><td>7</td><td>Refactor with no behavior change</td><td>Old tests still pass</td></tr>
+<tr><td>8</td><td>Vague request (must ask a question)</td><td>Run ends in "needs input", not a guess</td></tr>
+</table></div>
+<p>A full eval run is expensive. Phase 1 builds the eval harness with the eval tasks. It tests the harness with a fake agent (no quota). Real runs happen from Phase 2.</p>
+<div class="dec"><h4>D7. When do real evals run?</h4>
+<label class="opt"><input type="radio" name="D7" value="At phase end and on prompt change only" checked> Only at the end of a phase and on each prompt change. <span class="rec">recommended</span><small>+ Protects the window. − Slower regression signal.</small></label>
+<label class="opt"><input type="radio" name="D7" value="Nightly"> Nightly.<small>+ Early signal. − Spends window while you sleep, maybe before your work day.</small></label>
+<textarea data-note="D7" placeholder="Notes (optional)"></textarea></div>
+</div></details>
+
+<!-- STEP 10 -->
+<details id="s10"><summary>10. The dashboard shows 9 views, costs 0 tokens, and opens with one command.</summary>
+<div class="body">
+<div class="vis">
+<svg viewBox="0 0 600 170" width="100%" role="img" aria-label="Dashboard mock">
+<g stroke="currentColor" fill="none"><rect x="2" y="2" width="596" height="166" rx="8"/><line x1="2" y1="30" x2="598" y2="30"/><line x1="130" y1="30" x2="130" y2="168"/></g>
+<g font-size="11" fill="currentColor"><text x="12" y="20">Agent dashboard · localhost:8765</text>
+<text x="12" y="50">Overview</text><text x="12" y="68">Activity</text><text x="12" y="86">Messages</text><text x="12" y="104" opacity=".5">Task (P2)</text><text x="12" y="122" opacity=".5">Approvals (P3)</text>
+<text x="145" y="52">T-0007  build   dev→   2/3 fix   usage 31%</text>
+<text x="145" y="74">T-0006  done    —      1/3 fix   usage 12%</text>
+<text x="145" y="96" fill="#b45309">T-0005  waiting for your approval: merge</text>
+<text x="145" y="130" opacity=".7">19:40 tester  ran 14 tests, 2 failed</text></g></svg></div>
+<ul>
+<li>Python standard-library server plus one HTML file. It reads <code>logs/*.jsonl</code>, <code>tasks/*/*.json</code> and <code>git log</code>. It polls every 2 seconds (assumption).</li>
+<li>It writes only two kinds of file: approval decisions and pause/stop control files.</li>
+<li>Phase 1 ships Overview, Activity feed and Agent communication. Later phases add the other 6 views.</li>
+<li>Dark mode. Works at phone width. English UI. Command: <code>make dashboard</code>.</li>
+</ul>
+<div class="dec"><h4>D9. Should the dashboard be reachable from your phone?</h4>
+<label class="opt"><input type="radio" name="D9" value="Localhost only" checked> Localhost only. <span class="rec">recommended</span><small>+ No network exposure. The approve button needs no login. − No phone access away from the computer.</small></label>
+<label class="opt"><input type="radio" name="D9" value="Local network with a token"> Local network, with a random token.<small>+ Approve from phone at home. − Exposes an approve button. Needs token handling.</small></label>
+<textarea data-note="D9" placeholder="Notes (optional)"></textarea></div>
+</div></details>
+
+<!-- STEP 11 -->
+<details id="s11"><summary>11. The build takes 6 phases after this plan, and each phase ends with a stop for your approval.</summary>
+<div class="body">
+<div class="vis"><table>
+<tr><th>Phase</th><th>Output</th><th>Quota use</th></tr>
+<tr><td>1 Foundation</td><td>Schemas, runner, billing guard + test, ledger, logger, 8 evals, dashboard v1</td><td class="ok">Almost none (fake agent)</td></tr>
+<tr><td>2 Core loop</td><td>Architect + Developer + Tester on one narrow task</td><td class="warn">First real use</td></tr>
+<tr><td>3 Orchestrator</td><td>State machine, gates, usage-aware scheduler</td><td>Low</td></tr>
+<tr><td>4 Memory</td><td>Lessons, proposals, eval gate</td><td>Medium</td></tr>
+<tr><td>5 Specialists</td><td>One per real task</td><td>Per task</td></tr>
+<tr><td>6 Hardening</td><td>Kill, limit, bad output, injection tests</td><td>Medium</td></tr>
+</table></div>
+<div class="dec"><h4>D8. Where does the code live?</h4>
+<label class="opt"><input type="radio" name="D8" value="New separate repo" checked> A new separate repo. <span class="rec">recommended</span><small>+ Clean history. + No mix with the investment app. − You create the repo (I cannot create one in this session).</small></label>
+<label class="opt"><input type="radio" name="D8" value="agent-system/ folder in investment-os"> The <code>agent-system/</code> folder in this repo.<small>+ Works now, no setup. − Mixes two unrelated projects. − Agents could touch the app by mistake.</small></label>
+<textarea data-note="D8" placeholder="Notes (optional)"></textarea></div>
+<div class="dec"><h4>D10. Parallel agents</h4>
+<label class="opt"><input type="radio" name="D10" value="Sequential only; parallel needs approval per task" checked> Sequential by default. Parallel only with your approval for one task. <span class="rec">recommended</span><small>As in your brief.</small></label>
+<textarea data-note="D10" placeholder="Notes (optional)"></textarea></div>
+</div></details>
+
+<h3 id="files">Files read</h3>
+<ul class="files">
+<li>Your master prompt (this session)</li>
+<li>code.claude.com/docs/en/legal-and-compliance</li>
+<li>code.claude.com/docs/en/agent-sdk/overview</li>
+<li>support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan</li>
+<li>Repo root listing and environment variables of this container (not file contents of the app)</li>
+<li>Secondary news pages in search results (not relied on for facts)</li>
+</ul>
+
+<h3 id="respond">Respond</h3>
+<p>Click the button. The page copies your answers. Paste them in the chat.</p>
+<p><label>General notes<br><textarea id="gen" placeholder="Anything else"></textarea></label></p>
+<button class="go" id="btn">Respond (copy answers)</button> <span id="msg" style="color:var(--ok)"></span>
+<textarea id="out" readonly></textarea>
+</main>
+</div>
+<script>
+(function(){
+  function titleOf(name){var el=document.querySelector('input[name="'+name+'"]');return el?el.closest('.dec').querySelector('h4').textContent:name;}
+  function build(){
+    var names=[];document.querySelectorAll('input[type=radio]').forEach(function(r){if(names.indexOf(r.name)<0)names.push(r.name);});
+    names.sort(function(a,b){return parseInt(a.slice(1))-parseInt(b.slice(1));});
+    var t="Answers to Phase 0 plan:\n\n";
+    names.forEach(function(n){
+      var c=document.querySelector('input[name="'+n+'"]:checked');
+      var note=document.querySelector('textarea[data-note="'+n+'"]');
+      t+=titleOf(n)+"\n  -> "+(c?c.value:"(no answer)")+"\n";
+      if(note&&note.value.trim())t+="  Note: "+note.value.trim()+"\n";
+      t+="\n";
+    });
+    var g=document.getElementById('gen').value.trim();
+    if(g)t+="General notes: "+g+"\n";
+    return t;
+  }
+  document.getElementById('btn').addEventListener('click',function(){
+    var text=build(),out=document.getElementById('out'),msg=document.getElementById('msg');
+    function fallback(){out.style.display='block';out.value=text;out.focus();out.select();msg.style.color='var(--warn)';msg.textContent='Copy the text below by hand.';}
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(function(){msg.style.color='var(--ok)';msg.textContent='Copied. Paste it in the chat.';},fallback);
+      }else fallback();
+    }catch(e){fallback();}
+  });
+})();
+</script>
+</body>
+</html>

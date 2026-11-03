@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "event.schema.json",
+  "title": "Log event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ts",
+    "task_id",
+    "run_id",
+    "agent",
+    "model",
+    "event_type",
+    "from",
+    "to",
+    "summary",
+    "payload_ref",
+    "tokens_estimate",
+    "status"
+  ],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d\\d-\\d\\dT"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string"
+    },
+    "event_type": {
+      "enum": [
+        "state_change",
+        "message",
+        "tool_call",
+        "file_edit",
+        "command",
+        "test_run",
+        "decision",
+        "agent_start",
+        "agent_end",
+        "alert",
+        "approval",
+        "budget",
+        "limit_hit",
+        "guard",
+        "error"
+      ]
+    },
+    "from": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "to": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "payload_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tokens_estimate": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "error",
+        "blocked",
+        "pending",
+        "skipped"
+      ]
+    }
+  }
+}

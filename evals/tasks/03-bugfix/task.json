@@ -1,0 +1,7 @@
+{
+  "id": "03-bugfix",
+  "title": "Bug fix in a given repo",
+  "domain": "bugfix",
+  "prompt": "The test in test_pricing.py fails. Fix the bug in pricing.py. Do not change the test.",
+  "expected": "test_pricing.py passes unchanged"
+}

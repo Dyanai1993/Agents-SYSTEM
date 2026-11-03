@@ -1,0 +1,3 @@
+jsonschema>=4.20
+# Optional, only for the "sdk" backend (needs your own `claude login`):
+# claude-agent-sdk

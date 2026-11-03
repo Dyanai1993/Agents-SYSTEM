@@ -1,0 +1,7 @@
+{
+  "id": "04-data-analysis",
+  "title": "Data analysis of a small CSV",
+  "domain": "data",
+  "prompt": "Read sales.csv. Write report.json with keys: total_revenue (sum of qty*price), top_product (by revenue), and rows_skipped (rows with missing or non-numeric qty or price).",
+  "expected": "report.json numbers match the known answer"
+}

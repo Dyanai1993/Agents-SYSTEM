@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "approval_decision.schema.json",
+  "title": "Approval decision (written by dashboard)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "decision",
+    "decided_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "approved",
+        "rejected"
+      ]
+    },
+    "decided_at": {
+      "type": "string"
+    },
+    "note": {
+      "type": "string"
+    }
+  }
+}

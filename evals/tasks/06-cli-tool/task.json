@@ -1,0 +1,7 @@
+{
+  "id": "06-cli-tool",
+  "title": "Command-line tool with golden output",
+  "domain": "cli",
+  "prompt": "Write wc.py. 'python wc.py FILE' prints 'LINES WORDS CHARS FILE' (counts like Unix wc, one space between fields). A missing file prints 'wc.py: FILE: No such file' to stderr and exits 1.",
+  "expected": "golden output matches"
+}

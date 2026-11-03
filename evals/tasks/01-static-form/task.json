@@ -1,0 +1,7 @@
+{
+  "id": "01-static-form",
+  "title": "Small web page with a form",
+  "domain": "web",
+  "prompt": "Create index.html with a form: an email input named 'email', a required attribute on it, and a submit button.",
+  "expected": "index.html has form > input[name=email][required] + submit button"
+}

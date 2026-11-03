@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "approval_request.schema.json",
+  "title": "Approval request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "task_id",
+    "gate",
+    "context",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "gate": {
+      "enum": [
+        "merge",
+        "deploy",
+        "delete",
+        "send",
+        "spend",
+        "credentials",
+        "other"
+      ]
+    },
+    "context": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "diff_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

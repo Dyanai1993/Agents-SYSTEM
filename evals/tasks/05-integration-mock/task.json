@@ -1,0 +1,7 @@
+{
+  "id": "05-integration-mock",
+  "title": "Integration against a mock service",
+  "domain": "integration",
+  "prompt": "mock_service.py simulates a flaky API (HTTP 503 on the first 2 calls of each page, then success). Write client.py with fetch_all(service) that returns every record from all pages. Retry 503 up to 4 times with backoff via the injected service.sleep. Do not duplicate records. Raise ServiceDown if it still fails.",
+  "expected": "fetch_all returns all 5 records once and survives 2 failures per page"
+}

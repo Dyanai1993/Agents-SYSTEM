@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task_state.schema.json",
+  "title": "Task state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "title",
+    "state",
+    "current_agent",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "intake",
+        "plan",
+        "build",
+        "test",
+        "fix",
+        "security",
+        "integrate",
+        "deploy",
+        "review",
+        "done",
+        "blocked",
+        "failed",
+        "paused"
+      ]
+    },
+    "current_agent": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "waiting_approval": {
+      "type": "boolean"
+    }
+  }
+}

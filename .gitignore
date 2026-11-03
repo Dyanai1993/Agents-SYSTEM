@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+logs/*.jsonl
+tasks/*/
+state/*.json
+evals/results/*.json
+!evals/results/.gitkeep
+.env

@@ -1,0 +1,7 @@
+{
+  "id": "07-refactor",
+  "title": "Refactor with no behavior change",
+  "domain": "refactor",
+  "prompt": "Refactor messy.py: keep the function compute_total(orders) behavior. No function may be longer than 15 lines. Remove the duplicated tax code. Existing tests must still pass.",
+  "expected": "tests pass, no function > 15 lines, tax logic appears once"
+}

@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "test_report.schema.json",
+  "title": "Tester report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "checks",
+    "summary"
+  ],
+  "properties": {
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "result",
+          "evidence"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "pass",
+              "fail",
+              "skipped"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Command output. Pass without evidence is invalid."
+          },
+          "command": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "repro": {
+            "type": "string"
+          },
+          "probable_cause": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "items": {
+              "properties": {
+                "result": {
+                  "enum": [
+                    "pass",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

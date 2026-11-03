@@ -1,0 +1,7 @@
+{
+  "id": "08-vague-request",
+  "title": "Vague request must end in a question",
+  "domain": "intake",
+  "prompt": "Make the app better.",
+  "expected": "needs_input.json with at least 2 questions; no code files created"
+}

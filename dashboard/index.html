@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Dashboard</title>
+<style>
+:root{--bg:#fff;--fg:#1d2330;--mut:#5b6475;--card:#f5f7fa;--line:#d9dee7;--acc:#2f6fed;--ok:#17803d;--warn:#b45309;--bad:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--fg:#e6e9f0;--mut:#9aa3b5;--card:#1b2029;--line:#2c3342;--acc:#6b9bff;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg)}
+header h1{font-size:17px;margin:0 12px 0 0}
+nav button{background:none;border:1px solid var(--line);color:var(--fg);padding:5px 12px;border-radius:99px;cursor:pointer;margin-right:4px}
+nav button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+main{padding:16px;max-width:1200px;margin:auto}
+.card{background:var(--card);border-radius:10px;padding:12px;margin-bottom:12px;overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.pill{padding:1px 8px;border-radius:99px;border:1px solid var(--line);font-size:12px}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.mut{color:var(--mut)}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc)}
+input,select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px}
+.msg{border-left:3px solid var(--acc);padding:6px 10px;margin:6px 0;background:var(--card);border-radius:0 8px 8px 0}
+.msg.err{border-color:var(--bad)}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:6px 0 0}
+details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
+</style></head><body>
+<header><h1>Agent Dashboard</h1>
+<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button></nav>
+<span class="mut" id="stamp"></span></header>
+<main id="m"></main>
+<script>
+"use strict";
+let view="overview";
+const m=document.getElementById("m");
+const el=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k==="class")e.className=a[k];else e.setAttribute(k,a[k]);}c.flat().forEach(x=>e.append(x instanceof Node?x:document.createTextNode(String(x??""))));return e;};
+const get=async u=>(await fetch(u)).json();
+const stCls=s=>["done"].includes(s)?"ok":["blocked","failed"].includes(s)?"bad":"";
+function bar(p){const b=el("div",{class:"bar"}),i=el("i");i.style.width=Math.min(100,Math.round(p*100))+"%";b.append(i);return b;}
+async function overview(){
+  const o=await get("/api/overview"),w=o.window;m.replaceChildren();
+  if(o.bad_lines)m.append(el("div",{class:"card bad"},"Warning: "+o.bad_lines+" unreadable log lines skipped."));
+  m.append(el("div",{class:"card"},el("b",{},"Usage window (estimate, not official)"),
+    el("div",{},"5 hours: "+Math.round(w.share_5h*100)+"%"),bar(w.share_5h),el("div",{},"7 days: "+Math.round(w.share_7d*100)+"%"),bar(w.share_7d)));
+  if(o.alerts.length){const c=el("div",{class:"card"},el("b",{},"Alerts"));o.alerts.slice(-5).forEach(a=>c.append(el("div",{class:"alert"},a.ts.slice(11,19)+" "+a.agent+": "+a.summary)));m.append(c);}
+  const t=el("table",{},el("thead",{},el("tr",{},...["Task","State","Agent","Calls","Fix loops","Tokens (est)","Note"].map(h=>el("th",{},h)))));
+  const tb=el("tbody");o.tasks.forEach(r=>tb.append(el("tr",{},
+    el("td",{},r.task_id+" — "+r.title),el("td",{},el("span",{class:"pill "+stCls(r.state)},r.state)),el("td",{},r.current_agent||"—"),
+    el("td",{},r.calls+"/"+(r.call_cap??"?")),el("td",{},r.fix_loops+"/"+(r.fix_cap??"?")),el("td",{},r.tokens_est),
+    el("td",{class:r.waiting_approval?"warn":"mut"},r.waiting_approval?"waiting for your approval":(r.limit_hits?"limit hit":"")))));
+  t.append(tb);m.append(el("div",{class:"card"},o.tasks.length?t:"No tasks yet."));
+}
+function filters(withType){
+  const f=el("div",{class:"card"});
+  f.append(el("input",{id:"fq",placeholder:"search"}),el("input",{id:"ft",placeholder:"task id"}),el("input",{id:"fa",placeholder:"agent"}));
+  if(withType)f.append(el("input",{id:"fe",placeholder:"event type"}));
+  return f;
+}
+const val=id=>{const e=document.getElementById(id);return e?e.value:""};
+async function activity(){
+  if(!document.getElementById("fq")){m.replaceChildren(filters(true),el("div",{id:"list"}));}
+  const p=new URLSearchParams({q:val("fq"),task:val("ft"),agent:val("fa"),type:val("fe")});[...p].forEach(([k,v])=>{if(!v)p.delete(k)});
+  const r=await get("/api/events?"+p),t=el("table");
+  r.events.slice().reverse().forEach(e=>t.append(el("tr",{},el("td",{class:"mut"},e.ts.slice(11,19)),el("td",{},e.task_id),el("td",{},e.agent),
+    el("td",{},el("span",{class:"pill"},e.event_type)),el("td",{class:e.status==="error"||e.status==="blocked"?"bad":""},e.summary),el("td",{class:"mut"},e.tokens_estimate||""))));
+  document.getElementById("list").replaceChildren(el("div",{class:"card"},t));
+}
+async function messages(){
+  if(!document.getElementById("fq")){m.replaceChildren(filters(false),el("div",{id:"list"}));}
+  const p=new URLSearchParams({task:val("ft")});if(!val("ft"))p.delete("task");
+  const r=await get("/api/messages?"+p),box=el("div",{});
+  const q=val("fq").toLowerCase(),ag=val("fa");
+  for(const e of r.events.slice().reverse()){
+    if(ag&&e.agent!==ag)continue;if(q&&!JSON.stringify(e).toLowerCase().includes(q))continue;
+    const d=el("details",{class:"msg"+(e.status==="error"?" err":"")},el("summary",{},e.ts.slice(11,19)+"  "+(e.from||"?")+" → "+(e.to||"?")+"  ["+e.task_id+"]  "+e.summary));
+    d.addEventListener("toggle",async()=>{if(d.open&&!d.dataset.l&&e.payload_ref){d.dataset.l=1;const pl=await get("/api/payload?ref="+encodeURIComponent(e.payload_ref));d.append(el("pre",{},JSON.stringify(pl,null,2)));}});
+    box.append(d);
+  }
+  document.getElementById("list").replaceChildren(box.children.length?box:el("div",{class:"card"},"No messages."));
+}
+const views={overview,activity,messages};
+async function tick(){try{await views[view]();document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
+tick();setInterval(()=>{if(!document.querySelector("details[open]")&&!document.activeElement.matches?.("input"))tick();},2500);
+</script></body></html>

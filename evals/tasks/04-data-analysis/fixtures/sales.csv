@@ -1,0 +1,7 @@
+product,qty,price
+apple,10,2.5
+pear,4,3.0
+apple,5,2.5
+plum,,4.0
+pear,x,3.0
+plum,2,4.0
