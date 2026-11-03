@@ -18,6 +18,15 @@ make guard              # billing guard
 make demo && make dashboard   # demo data via fake backend, dashboard at http://127.0.0.1:8765
 ```
 
+### Windows (no `make`)
+```powershell
+python -m unittest discover -s tests -t . -v      # make test
+python evals/run_evals.py selfcheck               # make evals
+python -m agentsys.billing_guard                  # make guard
+python scripts/seed_demo.py; python dashboard/server.py 8765   # make demo; make dashboard
+```
+No need to install `make`: every target is one plain Python command.
+
 ## Layout
 | Path | Purpose |
 |---|---|
