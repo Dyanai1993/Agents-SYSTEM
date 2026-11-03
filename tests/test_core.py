@@ -1,6 +1,6 @@
 import json, os, stat, time, unittest
 from agentsys import config, ledger, logger, runner, schema, dashboard_data as dd
-from tests.base import TmpHome
+from tests.base import TmpHome, fake_claude
 
 PLAN = {"summary": "s", "complexity": "trivial", "tech_choices": [], "test_strategy": "t", "risks": [],
         "work_items": [{"id": "W1", "title": "t", "files": [], "acceptance_criteria": ["x"]}]}
@@ -106,32 +106,20 @@ class RunnerTests(TmpHome):
         self.assertEqual(fb.calls, [])
 
     def test_cli_backend_with_fake_claude_binary(self):
-        bindir = self.home / "bin"; bindir.mkdir()
-        exe = bindir / "claude"
-        exe.write_text("#!/usr/bin/env python3\nimport json,sys\nsys.stdin.read()\n"
+        env = fake_claude(self.home, "import json,sys\nsys.stdin.read()\n"
                        "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'none'}))\n"
                        "print(json.dumps({'type':'result','is_error':False,'result':json.dumps({'ok':1}),"
                        "'num_turns':2,'usage':{'input_tokens':10,'output_tokens':5}}))\n")
-        exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
-        env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
         r = runner.run_agent("developer", {"a": 1}, task_id="t3", backend=runner.CliBackend(), env=env, settings_paths=[])
         self.assertTrue(r.ok); self.assertEqual(r.output, {"ok": 1}); self.assertEqual(r.api_key_source, "none")
 
     def test_cli_backend_detects_usage_limit(self):
-        bindir = self.home / "bin"; bindir.mkdir()
-        exe = bindir / "claude"
-        exe.write_text("#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\nprint('Claude usage limit reached', file=sys.stderr)\nsys.exit(1)\n")
-        exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
-        env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
+        env = fake_claude(self.home, "import sys\nsys.stdin.read()\nprint('Claude usage limit reached', file=sys.stderr)\nsys.exit(1)\n")
         with self.assertRaises(runner.UsageLimitReached):
             runner.run_agent("developer", {}, task_id="t4", backend=runner.CliBackend(), env=env, settings_paths=[])
 
     def test_cli_backend_without_init_fails_closed(self):
-        bindir = self.home / "bin"; bindir.mkdir()
-        exe = bindir / "claude"
-        exe.write_text("#!/usr/bin/env python3\nimport json,sys\nsys.stdin.read()\nprint(json.dumps({'type':'result','is_error':False,'result':'{}','usage':{}}))\n")
-        exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
-        env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
+        env = fake_claude(self.home, "import json,sys\nsys.stdin.read()\nprint(json.dumps({'type':'result','is_error':False,'result':'{}','usage':{}}))\n")
         from agentsys.billing_guard import BillingGuardError
         with self.assertRaises(BillingGuardError):
             runner.run_agent("developer", {}, task_id="t5", backend=runner.CliBackend(), env=env, settings_paths=[])
