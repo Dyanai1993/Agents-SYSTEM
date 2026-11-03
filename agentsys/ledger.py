@@ -75,6 +75,12 @@ class Ledger:
         self.save()
 
 
+def estimate_task_units(n_items: int) -> float:
+    """Pre-task estimate in weighted tokens: architect + (developer + tester) per item + final regression."""
+    calls = 2 * n_items + 2
+    return calls * config.TOKENS_PER_CALL * config.FIX_MARGIN * config.MODEL_WEIGHT["sonnet"]
+
+
 class Window:
     """Rolling usage across all tasks. An estimate: no official remaining-window API exists."""
 

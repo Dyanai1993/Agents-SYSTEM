@@ -17,7 +17,7 @@ import json
 import subprocess
 
 from . import billing_guard, config, logger, runner, schema, semantics, tasks
-from .ledger import BudgetExceeded, Ledger
+from .ledger import BudgetExceeded, Ledger, Window, estimate_task_units
 
 QA_DIR = "qa_tests"
 
@@ -177,6 +177,12 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits):
         errs = semantics.plan_errors(plan, set(ac), call_cap)
         if errs:
             raise StepFailed("plan rejected: " + "; ".join(errs))
+        if prog["plan_done"] is False:             # the window check happens once, before any build work
+            ok, why = Window().can_start_large_task(estimate_task_units(len(plan["work_items"])))
+            if not ok:
+                _save(tdir / "plan.json", plan)
+                raise BudgetExceeded(f"{why}: this plan needs about {int(estimate_task_units(len(plan['work_items'])))} units. "
+                                     f"Wait for the window to reset, or ask me to start anyway")
         _save(tdir / "plan.json", plan)
         _save(tdir / f"plan-v{prog['replans'] + 1}.json", plan)
 

@@ -45,3 +45,8 @@ ROLE_LIMITS = {
     "reviewer": {"max_turns": 8, "timeout_s": 300},
     "smoke": {"max_turns": 4, "timeout_s": 120},
 }
+
+# Measured on live runs (Max 5x, 2026-11): a small task of 4 agent calls cost 85.8k-86.8k tokens,
+# one smoke call cost 19.6k. Most input is the fixed Claude Code context, so cost follows the NUMBER of calls.
+TOKENS_PER_CALL = 21_000
+FIX_MARGIN = 1.25            # reserve for fix loops when estimating a task before it starts
