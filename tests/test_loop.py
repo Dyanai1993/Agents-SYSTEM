@@ -282,7 +282,11 @@ class SemanticsTests(unittest.TestCase):
     def test_command_matching_ignores_whitespace(self):
         r = report("pass", [_check("a", "pass", ["W1.1"], command="python  -m   unittest")])
         self.assertEqual(semantics.evidence_errors(r, [{"tool": "Bash", "command": "python -m unittest"}], strict=True), [])
-        self.assertTrue(semantics.evidence_errors(r, [{"tool": "Read", "command": ""}], strict=True))
+        err = semantics.evidence_errors(r, [{"tool": "Read", "command": ""}], strict=True)
+        self.assertTrue(err)
+        self.assertIn("python  -m   unittest".replace("  ", " ").replace("  ", " "), err[0])      # shows what was claimed
+        err = semantics.evidence_errors(r, [{"tool": "Bash", "command": "ls -la"}], strict=True)
+        self.assertIn("ls -la", err[0])                                                           # and what was really run
 
 
 class PromptTests(TmpHome):

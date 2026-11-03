@@ -75,7 +75,9 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
             continue
         cmd = norm(c["command"])
         if not cmd or not any(cmd in r or (r and r in cmd) for r in ran):
-            errs.append(f"check '{c['name']}': command was not run (not in tool log)")
+            shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"
+            errs.append(f"check '{c['name']}': command was not run (not in tool log). Claimed: {cmd[:120]!r}. "
+                        f"Logged ({len(ran)}): {shown}")
     return errs
 
 
