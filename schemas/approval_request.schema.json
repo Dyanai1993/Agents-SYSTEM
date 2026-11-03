@@ -26,6 +26,7 @@
         "send",
         "spend",
         "credentials",
+        "opus",
         "other"
       ]
     },

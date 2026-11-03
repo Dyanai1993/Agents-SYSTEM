@@ -132,3 +132,56 @@ def quality():
         out.append({"task_id": d.name, "reports": reports, "fix_loops": bud.get("fix_loops", 0), "fix_cap": bud.get("fix_cap"),
                     "replans": bud.get("replans", 0)})
     return {"tasks": out}
+
+
+def approvals_view():
+    from . import approvals
+    pend = []
+    for a in approvals.pending():
+        st = _json(config.home() / "tasks" / a["task_id"] / "state.json") or {}
+        pend.append(dict(a, task_title=st.get("title", a["task_id"]), task_state=st.get("state")))
+    return {"pending": pend, "history": approvals.history()[-30:][::-1]}
+
+
+def usage_view():
+    import json as _j
+    win = Window()
+    rows = win._load()
+    by_agent, by_model = {}, {}
+    for r in rows:
+        by_agent[r["agent"]] = by_agent.get(r["agent"], 0) + r["tokens"]
+        by_model[r["model"]] = by_model.get(r["model"], 0) + r["tokens"]
+    tasks_out, hits = [], []
+    tdir = config.home() / "tasks"
+    for d in sorted(tdir.iterdir()) if tdir.is_dir() else []:
+        b = _json(d / "budget.json")
+        if not b:
+            continue
+        tasks_out.append({k: b.get(k) for k in ("task_id", "calls", "call_cap", "fix_loops", "fix_cap", "replans", "replan_cap", "tokens_est", "by_model", "by_agent")})
+        hits += [dict(h, task_id=d.name) for h in b.get("limit_hits", [])]
+    return {"window": win.used(), "tasks": tasks_out, "by_agent_7d": by_agent, "by_model_7d": by_model,
+            "limit_hits": hits[-20:], "note": "Window sizes are estimates, not official numbers."}
+
+
+def alerts_view():
+    from . import approvals
+    items = []
+    ov = overview()
+    for t in ov["tasks"]:
+        if t["state"] in ("blocked", "failed"):
+            items.append({"level": "bad", "task_id": t["task_id"], "text": f"task is {t['state']}: see status_report.md"})
+        if t["waiting_approval"]:
+            items.append({"level": "warn", "task_id": t["task_id"], "text": "waiting for your approval"})
+        if t["call_cap"] and t["calls"] >= 0.8 * t["call_cap"]:
+            items.append({"level": "warn", "task_id": t["task_id"], "text": f"agent calls {t['calls']}/{t['call_cap']}"})
+        if t["fix_cap"] and t["fix_loops"] >= t["fix_cap"]:
+            items.append({"level": "bad", "task_id": t["task_id"], "text": "fix-loop cap reached"})
+    w = ov["window"]
+    if w["share_5h"] >= 0.7:
+        items.append({"level": "warn", "task_id": None, "text": f"5-hour window about {int(w['share_5h'] * 100)}% used (estimate)"})
+    for a in approvals.pending():
+        items.append({"level": "warn", "task_id": a["task_id"], "text": f"pending approval: {a['gate']}"})
+    for e in ov["alerts"]:
+        items.append({"level": "bad" if e["status"] in ("blocked", "error") else "warn", "task_id": e["task_id"],
+                      "text": f"{e['ts'][11:19]} {e['agent']}: {e['summary']}"})
+    return {"items": items}

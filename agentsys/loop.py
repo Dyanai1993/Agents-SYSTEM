@@ -16,7 +16,7 @@ import hashlib
 import json
 import subprocess
 
-from . import billing_guard, config, logger, runner, schema, semantics, tasks
+from . import approvals, billing_guard, config, control, logger, runner, schema, semantics, tasks
 from .ledger import BudgetExceeded, Ledger, Window, estimate_task_units
 
 QA_DIR = "qa_tests"
@@ -28,6 +28,14 @@ class StepFailed(RuntimeError):
 
 class NeedsInput(RuntimeError):
     """A human must answer. Used only for missing information, never for budget or environment problems."""
+
+
+class Paused(RuntimeError):
+    """The user asked to pause (control file). Progress is saved at the last finished step."""
+
+
+class Stopped(RuntimeError):
+    """The user asked to stop (control file)."""
 
 
 class EnvBlocked(RuntimeError):
@@ -112,6 +120,12 @@ def run_task(task_id, requirements, *, backend, title=None, env=None, settings_p
         status, state, msg = "ready_for_review", "review", "All work items and the final regression passed. Waiting for your review."
     except runner.UsageLimitReached as e:
         status, state, msg = "paused", "paused", f"Usage limit reached. State saved. Run the same command again later. ({e})"
+    except Paused as e:
+        status, state, msg = "paused", "paused", f"{e}. Resume from the dashboard or `orch.py resume`."
+    except Stopped as e:
+        status, state, msg = "stopped", "blocked", str(e)
+    except approvals.OpusNotApproved as e:
+        status, state, msg = "needs_approval", "blocked", f"{e}. Approve it in the dashboard, then run the task again."
     except NeedsInput as e:
         status, state, msg = "needs_input", "blocked", str(e)
     except EnvBlocked as e:
@@ -162,6 +176,11 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits):
     call_cap = Ledger(task_id).data["call_cap"]
 
     def agent(role, payload, post_process=None):
+        ctl = control.read(task_id)               # checked before EVERY agent call
+        if ctl == "pause":
+            raise Paused("paused by user")
+        if ctl == "stop":
+            raise Stopped("stopped by user")
         prog["runs"] += 1
         save()
         res = runner.run_agent(role, payload, task_id=task_id, run_id=f"r{prog['runs']}", backend=backend, cwd=str(ws),

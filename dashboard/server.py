@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agentsys import dashboard_data as d  # noqa: E402
+from agentsys import actions, dashboard_data as d  # noqa: E402
 
 INDEX = Path(__file__).with_name("index.html")
 
@@ -40,12 +40,27 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200 if t else 404, t or {"error": "not found"})
             if u.path == "/api/quality":
                 return self._send(200, d.quality())
+            if u.path == "/api/approvals":
+                return self._send(200, d.approvals_view())
+            if u.path == "/api/usage":
+                return self._send(200, d.usage_view())
+            if u.path == "/api/alerts":
+                return self._send(200, d.alerts_view())
             if u.path == "/api/payload":
                 p = d.payload(q.get("ref", ""))
                 return self._send(200 if p is not None else 404, p if p is not None else {"error": "not found"})
         except Exception as e:  # the dashboard must never crash on bad data
             return self._send(500, {"error": str(e)[:200]})
         self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(min(n, 20000)) or b"{}")
+        except (ValueError, OSError):
+            return self._send(400, {"error": "bad json"})
+        code, obj = actions.handle_post(urlparse(self.path).path, body, dict(self.headers))
+        self._send(code, obj)
 
     def log_message(self, *a):
         pass

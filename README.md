@@ -1,6 +1,6 @@
 # Multi-agent engineering system (personal use, subscription only)
 
-Status: **Phase 1 – Foundation.** No real agent prompts yet (Phase 2).
+Status: **Phase 3 – Orchestrator** (phases 1-2 done and verified live). Next: shared memory (Phase 4).
 
 ## Rules that never change
 - Billing = your Claude Max login (`claude login`). No API key. `make guard` fails if any API-key / provider variable is set.
@@ -38,3 +38,14 @@ No need to install `make`: every target is one plain Python command.
 | `dashboard/` | local read-only dashboard (Overview, Activity, Messages) |
 
 See `docs/architecture.md`.
+
+## Run a task end to end (Phase 3)
+```bash
+python scripts/orch.py submit T-0010 --request "A CLI that converts CSV to JSON, stdlib only" [--target-repo PATH]
+python scripts/orch.py run-next       # advances ONE task: intake -> plan -> build/test/fix -> merge gate
+python scripts/orch.py pending        # or use the dashboard: Approvals tab
+python scripts/orch.py approve T-0010-merge-1
+python scripts/orch.py run-next       # delivers patches (and branch agentsys/T-0010 in the target repo)
+python scripts/orch.py pause|stop|resume T-0010
+```
+Approving a merge never merges into `main` and never pushes: it writes patch files to `deliveries/<task>/` and, with `--target-repo`, creates a new branch there.
