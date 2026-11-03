@@ -5,13 +5,21 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "status",
     "summary",
     "files_changed"
   ],
   "properties": {
+    "status": {
+      "enum": [
+        "ok",
+        "blocked"
+      ]
+    },
     "summary": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "\\S"
     },
     "files_changed": {
       "type": "array",
@@ -30,6 +38,64 @@
     },
     "notes": {
       "type": "string"
+    },
+    "blocking_kind": {
+      "enum": [
+        "user_input",
+        "environment"
+      ]
+    },
+    "blocking_reason": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "tests_added",
+          "tests_run"
+        ],
+        "properties": {
+          "tests_run": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "blocked"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "blocking_kind",
+          "blocking_reason"
+        ]
+      }
+    }
+  ]
 }

@@ -1,0 +1,22 @@
+# Response to review 1
+
+| # | Finding | Status | Where |
+|---|---|---|---|
+| 1 | Prompt fields optional in schema | **Done**: `depends_on`, `covers`, `tests_run` (when ok), `design_problem`, `constraints_na`, `command`, `criterion_ids` are required; non-blank strings use `pattern \S`; fail checks need severity/repro/probable_cause; design_problem needs rationale | `schemas/*.json`, `tests/test_core.py` |
+| 2 | `pass` + `skipped` accepted | **Done**: `pass` needs every check `pass`. A pass check needs a real command and evidence or `exit_code: 0` | `test_report.schema.json` |
+| 2 | Evidence not proven | **Done in code, not yet proven live**: every pass/fail check's command must appear in the backend tool log. CLI backend parses `stream-json` tool_use/tool_result. Fails closed when no tool log (`AGENTSYS_EVIDENCE=warn` to relax). The SDK backend does not build a tool log yet, so it fails closed. | `semantics.evidence_errors`, `runner.CliBackend` |
+| 3 | Weak tests fool the Tester | **Partly**: prompt rule (derive expectations from criteria, check must fail for a wrong implementation); `criterion_ids` coverage enforced by code. Assertion quality itself stays a prompt rule. Mutation testing is not built. | `tester.md`, `semantics.derive_verdict` |
+| 4 | fail / blocked contradiction | **Done**: one decision order, recomputed by code (`fail` > `blocked` > `pass`). Reported `fail` with all checks passing is a hard error. `design_problem` redefined with required rationale | `semantics.process_test_report` |
+| 5 | `QUESTION:` / `BLOCKED:` prefixes | **Done**: `status: needs_input` + `questions` (Architect); `status: blocked` + `blocking_kind: user_input\|environment` (Developer). Environment blocks are not shown as user questions. Blocking `unknowns` stop before any agent call | `plan`, `dev_report` schemas, `loop.py` |
+| 5 | Opus approval channel | **Open (Phase 3)**: approval will be a decision file written by the dashboard, never text from an agent |  |
+| 6 | Lost requirements | **Done**: constraints and original criteria go to Developer and Tester; plan must cover every `AC`; replan gets failing item, completed ids and cannot drop coverage; completed unchanged items are not rebuilt; ids unique, dependencies valid and ordered, trivial <= 3 items, plan size checked against the call cap | `semantics.plan_errors`, `loop.py` |
+| 6 | Final regression | **Done**: one tester run on the finished workspace against all original criteria and constraints | `loop.py` |
+| 7 | Injection beyond role-change | **Prompt part done** (safety line rewritten). **Open (Phase 6)**: OS-level sandbox, no secrets in the task environment, network limits. Bash cannot be made read-only by tool lists. |  |
+| 7 | Tester mutates files | **Done (detective)**: product-file changes after a tester run are reverted and the report is discarded. `qa_tests/` edits by the developer are reverted | `loop.py` |
+| 8 | JSON-only reliability | **Partly**: real JSON examples in prompts, and a test that validates those examples against the schemas. `--json-schema` not adopted (Draft-07 vs 2020-12, internal retries vs no-retry rule): decide after the first live run | `tests/test_loop.py::PromptTests` |
+| 9 | Commit policy | **Done**: commit per successful developer run; `qa:` commit for tester files; blocked/failed developer work is not committed and is listed in the status report; `files_changed` is taken from git, model claims are cross-checked | `loop.py` docstring |
+| 10 | Usage | **Done**: per-role turn and time limits; adversarial checks risk-based (0-5); evidence is a short excerpt, full output in the tool log payload; rejected alternatives optional; budget math (`1 + 2N + 1` calls) enforced at plan time. Prompt wording trimmed. | `config.ROLE_LIMITS`, `semantics.plan_errors` |
+| - | Architect `Write` tool | **Done**: removed | `config.py`, `architect.md` |
+
+## Still unverified
+Everything above runs against the fake backend and a fake `claude` binary only. The first live run must confirm: the real `stream-json` shape (tool_use / tool_result), `apiKeySource`, and that the tool-log check does not reject honest runs.

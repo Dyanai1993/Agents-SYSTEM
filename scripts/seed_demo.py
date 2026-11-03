@@ -4,13 +4,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agentsys import tasks, runner  # noqa: E402
 
-PLAN = {"summary": "Add /health endpoint", "complexity": "trivial",
+PLAN = {"status": "ok", "summary": "Add /health endpoint", "complexity": "trivial",
         "tech_choices": [{"choice": "stdlib http.server", "reason": "no deps", "rejected": ["flask"]}],
-        "work_items": [{"id": "W1", "title": "health route", "files": ["app.py"], "acceptance_criteria": ["GET /health returns 200"]}],
+        "work_items": [{"id": "W1", "title": "health route", "files": ["app.py"], "acceptance_criteria": ["GET /health returns 200"],
+                        "covers": ["AC1"], "depends_on": []}],
         "test_strategy": "unit test", "risks": []}
-REPORT = {"verdict": "pass", "summary": "1 test ok",
-          "checks": [{"name": "unit", "result": "pass", "evidence": "Ran 1 test in 0.001s OK", "command": "python -m unittest"}]}
-fb = runner.FakeBackend({"architect": PLAN, "tester": REPORT, "developer": {"summary": "added route", "files_changed": ["app.py"]}})
+REPORT = {"verdict": "pass", "summary": "1 test ok", "design_problem": False, "constraints_na": [],
+          "checks": [{"name": "unit", "result": "pass", "criterion_ids": ["W1.1"], "evidence": "Ran 1 test in 0.001s OK", "command": "python -m unittest"}]}
+DEVR = {"status": "ok", "summary": "added route", "files_changed": ["app.py"], "tests_added": ["t.py"], "tests_run": "unittest OK"}
+fb = runner.FakeBackend({"architect": PLAN, "tester": REPORT, "developer": DEVR})
 for tid, title in (("demo-1", "Add health endpoint"), ("demo-2", "Parse CSV report")):
     tasks.set_state(tid, "plan", title=title, current_agent="architect")
     runner.run_agent("architect", {"requirement": title}, task_id=tid, backend=fb)

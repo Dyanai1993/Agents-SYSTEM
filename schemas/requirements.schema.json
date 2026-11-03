@@ -14,19 +14,24 @@
   "properties": {
     "goal": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "\\S"
     },
     "constraints": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
       }
     },
     "acceptance_criteria": {
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
       }
     },
     "risks": {
@@ -46,10 +51,13 @@
         ],
         "properties": {
           "question": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
           },
           "blocking": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "true = the loop stops and asks the user before any agent runs"
           }
         }
       }

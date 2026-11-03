@@ -6,8 +6,10 @@
   "additionalProperties": false,
   "required": [
     "verdict",
-    "checks",
-    "summary"
+    "summary",
+    "design_problem",
+    "constraints_na",
+    "checks"
   ],
   "properties": {
     "verdict": {
@@ -17,8 +19,48 @@
         "blocked"
       ]
     },
+    "verdict_reported": {
+      "enum": [
+        "pass",
+        "fail",
+        "blocked"
+      ]
+    },
     "summary": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "design_problem": {
+      "type": "boolean"
+    },
+    "design_rationale": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "constraints_na": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        }
+      }
     },
     "checks": {
       "type": "array",
@@ -29,11 +71,15 @@
         "required": [
           "name",
           "result",
+          "criterion_ids",
+          "command",
           "evidence"
         ],
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
           },
           "result": {
             "enum": [
@@ -42,13 +88,23 @@
               "skipped"
             ]
           },
-          "evidence": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Command output. Pass without evidence is invalid."
+          "criterion_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ids like W1.1 or AC2 or C1 that this check verifies"
           },
           "command": {
             "type": "string"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Short excerpt of real output. Full output is kept in the tool log."
           },
           "severity": {
             "enum": [
@@ -64,11 +120,90 @@
           "probable_cause": {
             "type": "string"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "result": {
+                  "const": "pass"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "criterion_ids": {
+                  "minItems": 1
+                }
+              },
+              "anyOf": [
+                {
+                  "properties": {
+                    "evidence": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    }
+                  }
+                },
+                {
+                  "required": [
+                    "exit_code"
+                  ],
+                  "properties": {
+                    "exit_code": {
+                      "const": 0
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "result": {
+                  "const": "fail"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "severity",
+                "repro",
+                "probable_cause"
+              ],
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "repro": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "probable_cause": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              }
+            }
+          }
+        ]
       }
-    },
-    "design_problem": {
-      "type": "boolean"
     }
   },
   "allOf": [
@@ -86,15 +221,26 @@
             "items": {
               "properties": {
                 "result": {
-                  "enum": [
-                    "pass",
-                    "skipped"
-                  ]
+                  "const": "pass"
                 }
               }
             }
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "design_problem": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "design_rationale"
+        ]
       }
     }
   ]
