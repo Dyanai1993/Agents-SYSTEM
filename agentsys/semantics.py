@@ -62,22 +62,51 @@ def derive_verdict(report: dict, expected_ids, constraint_ids):
     return ("blocked" if reasons else "pass"), reasons
 
 
+MIN_EVIDENCE_CHARS = 6
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
+    """True when the evidence excerpt really appears in tool output.
+
+    Excerpts may be shortened with '...' : every fragment of 6+ characters must appear.
+    Whitespace is ignored. Short evidence ('OK', '0') proves nothing and never matches.
+    """
+    frags = [_squash(f) for f in re.split(r"\.\.\.|\u2026", evidence or "")]
+    frags = [f for f in frags if f]
+    if not frags or any(len(f) < MIN_EVIDENCE_CHARS for f in frags):
+        return False
+    return all(f in outputs_squashed for f in frags)
+
+
 def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
-    """Every pass/fail check must name a command that really ran (from the backend's tool log)."""
+    """Every pass/fail check must be backed by a real Bash run in the backend's tool log.
+
+    A check is backed when EITHER its command text matches a logged Bash command
+    OR its evidence excerpt (6+ chars) appears in the output of a logged Bash call.
+    The second rule allows one script to verify several checks, while fabricated output is still caught.
+    """
     if strict is None:
         strict = os.environ.get("AGENTSYS_EVIDENCE", "strict") != "warn"
     if tool_log is None:
         return ["backend gave no tool log: evidence cannot be verified"] if strict else []
-    ran = [norm(t.get("command", "")) for t in tool_log if t.get("tool") == "Bash"]
+    bash = [t for t in tool_log if t.get("tool") == "Bash"]
+    ran = [norm(t.get("command", "")) for t in bash]
+    outputs = _squash(" ".join(t.get("output", "") for t in bash))
     errs = []
     for c in report["checks"]:
         if c["result"] == "skipped":
             continue
         cmd = norm(c["command"])
-        if not cmd or not any(cmd in r or (r and r in cmd) for r in ran):
-            shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"
-            errs.append(f"check '{c['name']}': command was not run (not in tool log). Claimed: {cmd[:120]!r}. "
-                        f"Logged ({len(ran)}): {shown}")
+        by_command = bool(cmd) and any(cmd in r or (r and r in cmd) for r in ran)
+        if by_command or _evidence_in_output(c["evidence"], outputs):
+            continue
+        shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"
+        errs.append(f"check '{c['name']}': neither its command nor its evidence appears in the tool log. "
+                    f"Claimed command: {cmd[:120]!r}. Logged Bash calls ({len(ran)}): {shown}")
     return errs
 
 
