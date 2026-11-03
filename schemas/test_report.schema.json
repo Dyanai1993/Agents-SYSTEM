@@ -66,6 +66,9 @@
           }
         }
       }
+    },
+    "design_problem": {
+      "type": "boolean"
     }
   },
   "allOf": [

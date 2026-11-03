@@ -10,7 +10,7 @@ PLAN = {"summary": "Add /health endpoint", "complexity": "trivial",
         "test_strategy": "unit test", "risks": []}
 REPORT = {"verdict": "pass", "summary": "1 test ok",
           "checks": [{"name": "unit", "result": "pass", "evidence": "Ran 1 test in 0.001s OK", "command": "python -m unittest"}]}
-fb = runner.FakeBackend({"architect": PLAN, "tester": REPORT, "developer": {"files_changed": ["app.py"], "notes": "done"}})
+fb = runner.FakeBackend({"architect": PLAN, "tester": REPORT, "developer": {"summary": "added route", "files_changed": ["app.py"]}})
 for tid, title in (("demo-1", "Add health endpoint"), ("demo-2", "Parse CSV report")):
     tasks.set_state(tid, "plan", title=title, current_agent="architect")
     runner.run_agent("architect", {"requirement": title}, task_id=tid, backend=fb)

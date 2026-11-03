@@ -19,7 +19,7 @@ MODELS = {"haiku": "haiku", "sonnet": "sonnet", "opus": "opus"}
 ROLES = {
     "orchestrator": {"model": "haiku", "tools": [], "schema": "requirements"},
     "architect": {"model": "sonnet", "tools": ["Read", "Grep", "Glob", "Write"], "schema": "plan"},
-    "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": None},
+    "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": "dev_report"},
     "tester": {"model": "sonnet", "tools": ["Read", "Bash", "Grep", "Glob"], "schema": "test_report"},
     "reviewer": {"model": "haiku", "tools": ["Read"], "schema": None},
 }

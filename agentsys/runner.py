@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import billing_guard, config, logger, schema
+from . import billing_guard, config, logger, prompts, schema
 from .ledger import BudgetExceeded, Ledger, Window
 
 
@@ -87,9 +87,11 @@ class FakeBackend:
     def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
         self.calls.append({"role": role, "prompt": prompt, "model": model})
         r = self.responses.get(role, {})
+        if isinstance(r, list):          # scripted sequence: the last item repeats
+            r = r.pop(0) if len(r) > 1 else r[0]
         if callable(r):
             r = r(prompt)
-        if isinstance(r, Exception):
+        if isinstance(r, BaseException):
             raise r
         text = r if isinstance(r, str) else json.dumps(r)
         n = max(1, (len(prompt) + len(text)) // 4)
@@ -207,6 +209,11 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
     model = model or spec["model"]
     backend = backend or get_backend()
     ledger = Ledger(task_id)
+    if system_prompt is None:
+        try:
+            system_prompt = prompts.load_role(role)[0]
+        except FileNotFoundError:
+            system_prompt = None
 
     billing_guard.run_guard(env=env, settings_paths=settings_paths)   # every call, not only at startup
     ledger.check_can_call()                                           # raises BudgetExceeded
