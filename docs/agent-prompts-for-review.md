@@ -796,6 +796,7 @@ If the workspace is empty or nothing can run, return a check with result "skippe
 
 The prompts ask for these things. This module enforces them.
 """
+import difflib
 import os
 import re
 
@@ -859,28 +860,42 @@ def derive_verdict(report: dict, expected_ids, constraint_ids):
 MIN_EVIDENCE_CHARS = 6
 
 
+_PATH_TOKEN = re.compile(r"\S*[/\\]\S*|\b[A-Za-z]:\S*")
+
+
 def _squash(text: str) -> str:
-    return re.sub(r"\s+", "", text or "")
+    """Drop whitespace and mask path-like tokens.
+
+    Git Bash on Windows rewrites /tmp/f.txt to C:/Users/.../f.txt in the output, so a quoted
+    path never equals the real one. Both sides are masked the same way: the numbers and words
+    around the path must still match, the path itself does not.
+    """
+    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or ""))
+
+
+MIN_SHARE = 0.75
 
 
 def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
-    """True when the evidence excerpt really appears in tool output.
+    """True when the evidence excerpt is really in a tool output.
 
-    Excerpts may be shortened with '...' : every fragment of 6+ characters must appear.
-    Whitespace is ignored. Short evidence ('OK', '0') proves nothing and never matches.
+    Models add labels around real output ("stderr: ...", "exit code 1, ..."), shorten it with "...",
+    or quote a path that Git Bash rewrote. So the test is: the longest run of evidence characters that
+    appears unchanged in the output must be at least 6 characters AND 75% of the evidence.
+    Short evidence ('OK', '0') can never pass this: it needs a matching command instead.
     """
-    frags = [_squash(f) for f in re.split(r"\.\.\.|\u2026", evidence or "")]
-    frags = [f for f in frags if f]
-    if not frags or any(len(f) < MIN_EVIDENCE_CHARS for f in frags):
+    ev = _squash(re.sub(r"\.\.\.|\u2026", "", evidence or ""))      # '...' marks a cut, not content
+    if len(ev) < MIN_EVIDENCE_CHARS or not outputs_squashed:
         return False
-    return all(f in outputs_squashed for f in frags)
+    m = difflib.SequenceMatcher(None, ev, outputs_squashed, autojunk=False).find_longest_match(0, len(ev), 0, len(outputs_squashed))
+    return m.size >= max(MIN_EVIDENCE_CHARS, MIN_SHARE * len(ev))
 
 
 def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
     """Every pass/fail check must be backed by a real Bash run in the backend's tool log.
 
     A check is backed when EITHER its command text matches a logged Bash command
-    OR its evidence excerpt (6+ chars) appears in the output of a logged Bash call.
+    OR its evidence excerpt is found in the output of a logged Bash call (see _evidence_in_output).
     The second rule allows one script to verify several checks, while fabricated output is still caught.
     """
     if strict is None:
