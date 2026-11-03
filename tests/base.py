@@ -17,3 +17,25 @@ class TmpHome(unittest.TestCase):
     def tearDown(self):
         os.environ.clear(); os.environ.update(self._saved)
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def fake_claude(home, body):
+    """Create a fake `claude` executable in home/bin. Return an env dict whose PATH finds it.
+
+    Works on Linux, macOS and Windows (claude.py + claude.cmd wrapper using the current Python).
+    """
+    import stat, sys
+    bindir = Path(home) / "bin"
+    bindir.mkdir(exist_ok=True)
+    if os.name == "nt":
+        (bindir / "claude.py").write_text(body, encoding="utf-8")
+        (bindir / "claude.cmd").write_text(f'@echo off\r\n"{sys.executable}" "%~dp0claude.py" %*\r\n', encoding="utf-8")
+    else:
+        exe = bindir / "claude"
+        exe.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
+        exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+    if os.name == "nt":
+        env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", "")
+        env["PATHEXT"] = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    return env
