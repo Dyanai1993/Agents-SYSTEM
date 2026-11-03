@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import billing_guard, config, logger, schema
+from . import billing_guard, config, logger, prompts, schema
 from .ledger import BudgetExceeded, Ledger, Window
 
 
@@ -42,6 +42,7 @@ class AgentResult:
     api_key_source: str = None
     error: str = None
     init: dict = None
+    tool_log: list = None      # [{tool, command, output, is_error}] or None if the backend cannot provide it
 
 
 _LIMIT_PAT = re.compile(r"(usage limit|limit reached|rate.?limit|5-hour limit|weekly limit|out of extra usage)", re.I)
@@ -79,21 +80,30 @@ class FakeBackend:
     """responses: role -> dict | str | Exception | callable(prompt)->dict|str."""
     name = "fake"
 
-    def __init__(self, responses=None, api_key_source="none"):
+    def __init__(self, responses=None, api_key_source="none", tool_logs=None):
         self.responses = responses or {}
+        self.tool_logs = tool_logs          # role -> list; None = derive from output.checks[].command
         self.api_key_source = api_key_source
         self.calls = []
 
     def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
         self.calls.append({"role": role, "prompt": prompt, "model": model})
         r = self.responses.get(role, {})
+        if isinstance(r, list):          # scripted sequence: the last item repeats
+            r = r.pop(0) if len(r) > 1 else r[0]
         if callable(r):
             r = r(prompt)
-        if isinstance(r, Exception):
+        if isinstance(r, BaseException):
             raise r
         text = r if isinstance(r, str) else json.dumps(r)
-        n = max(1, (len(prompt) + len(text)) // 4)
-        return AgentResult(role=role, ok=True, text=text, backend=self.name, api_key_source=self.api_key_source,
+        if self.tool_logs is not None and role in self.tool_logs:
+            tl = self.tool_logs[role]
+        elif isinstance(r, dict) and role == "tester":
+            tl = [{"tool": "Bash", "command": c.get("command", ""), "output": c.get("evidence", ""), "is_error": False}
+                  for c in r.get("checks", []) if c.get("command")]
+        else:
+            tl = []
+        return AgentResult(tool_log=tl, role=role, ok=True, text=text, backend=self.name, api_key_source=self.api_key_source,
                            usage={"input_tokens": len(prompt) // 4, "output_tokens": len(text) // 4, "turns": 1},
                            init={"apiKeySource": self.api_key_source})
 
@@ -122,6 +132,7 @@ class CliBackend:
             return AgentResult(role=role, ok=False, backend=self.name, error=f"timeout after {limits.timeout_s}s",
                                duration_s=time.time() - t0)
         init, result = None, None
+        calls, outputs = {}, {}
         for line in p.stdout.splitlines():
             try:
                 msg = json.loads(line)
@@ -131,6 +142,19 @@ class CliBackend:
                 init = msg
             elif msg.get("type") == "result":
                 result = msg
+            elif msg.get("type") in ("assistant", "user"):
+                content = (msg.get("message") or {}).get("content")
+                for blk in content if isinstance(content, list) else []:
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("type") == "tool_use":
+                        calls[blk.get("id")] = {"tool": blk.get("name"), "command": (blk.get("input") or {}).get("command", "")}
+                    elif blk.get("type") == "tool_result":
+                        out = blk.get("content")
+                        if isinstance(out, list):
+                            out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
+                        outputs[blk.get("tool_use_id")] = (str(out or "")[:4000], bool(blk.get("is_error")))
+        tool_log = [dict(c, output=outputs.get(i, ("", False))[0], is_error=outputs.get(i, ("", False))[1]) for i, c in calls.items()]
         blob = (p.stderr or "") + " " + json.dumps(result or {})
         if (result is None or result.get("is_error")) and looks_like_limit(blob):
             raise UsageLimitReached(blob[:300])
@@ -138,7 +162,7 @@ class CliBackend:
             return AgentResult(role=role, ok=False, backend=self.name, init=init, duration_s=time.time() - t0,
                                error=(p.stderr or str(result))[:300])
         u = result.get("usage") or {}
-        return AgentResult(role=role, ok=True, text=result.get("result", ""), backend=self.name, init=init,
+        return AgentResult(role=role, ok=True, text=result.get("result", ""), backend=self.name, init=init, tool_log=tool_log,
                            api_key_source=(init or {}).get("apiKeySource"), duration_s=time.time() - t0,
                            usage={"input_tokens": u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0),
                                   "output_tokens": u.get("output_tokens", 0), "turns": result.get("num_turns", 1)})
@@ -199,14 +223,19 @@ def get_backend(name=None):
 
 # ---------------------------------------------------------------- the interface
 def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", backend=None, cwd=None,
-              env=None, settings_paths=None, system_prompt=None) -> AgentResult:
+              env=None, settings_paths=None, system_prompt=None, post_process=None) -> AgentResult:
     """Guard -> budget check -> backend -> init check -> ledger -> schema check -> log. Sequential, no retries."""
     env = dict(os.environ if env is None else env)
-    limits = limits or Limits()
     spec = config.ROLES.get(role, {"model": "sonnet", "tools": [], "schema": None})
     model = model or spec["model"]
+    limits = limits or Limits(**config.ROLE_LIMITS.get(role, {}))
     backend = backend or get_backend()
     ledger = Ledger(task_id)
+    if system_prompt is None:
+        try:
+            system_prompt = prompts.load_role(role)[0]
+        except FileNotFoundError:
+            system_prompt = None
 
     billing_guard.run_guard(env=env, settings_paths=settings_paths)   # every call, not only at startup
     ledger.check_can_call()                                           # raises BudgetExceeded
@@ -252,6 +281,15 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
             res.output = extract_json(res.text)
         except ValueError:
             res.output = {"text": res.text}
+    if res.tool_log:
+        log("tool_call", f"{len(res.tool_log)} tool call(s) recorded", payload=res.tool_log)
+    if post_process is not None:
+        errs = post_process(res)
+        if errs:
+            res.ok, res.error = False, "semantic_validation: " + "; ".join(errs)
+            log("error", f"{role} output failed semantic checks", status="error", tokens_estimate=tokens,
+                payload={"errors": errs, "output": res.output})
+            return res
     log("message", f"{role} -> orchestrator ({spec['schema'] or 'free text'})", from_=role, to="orchestrator",
         tokens_estimate=tokens, payload=res.output)
     log("agent_end", f"{role} done in {res.duration_s:.1f}s", tokens_estimate=tokens)

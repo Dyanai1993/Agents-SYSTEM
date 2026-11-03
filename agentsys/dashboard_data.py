@@ -91,3 +91,44 @@ def payload(ref):
             or not parts[3].endswith(".json") or ".." in ref:
         return None
     return _json(config.home() / ref)
+
+
+MAIN_STATES = ["intake", "plan", "build", "test", "fix", "security", "integrate", "deploy", "review", "done"]
+
+
+def task_detail(task_id):
+    if not logger.TASK_ID_RE.match(task_id or ""):
+        return None
+    d = config.home() / "tasks" / task_id
+    if not d.is_dir():
+        return None
+    events, bad = all_events(task_id)
+    return {"task_id": task_id, "state": _json(d / "state.json") or {}, "budget": _json(d / "budget.json") or {},
+            "progress": _json(d / "progress.json") or {}, "plan": _json(d / "plan.json"),
+            "events": events, "bad_lines": bad, "states": MAIN_STATES,
+            "has_status_report": (d / "status_report.md").exists()}
+
+
+def quality():
+    out = []
+    tdir = config.home() / "tasks"
+    if not tdir.is_dir():
+        return {"tasks": out}
+    for d in sorted(tdir.iterdir()):
+        if not d.is_dir() or not logger.TASK_ID_RE.match(d.name):
+            continue
+        reports = []
+        for p in sorted((d / "reports").glob("test_report-*.json")) if (d / "reports").is_dir() else []:
+            r = _json(p)
+            if not isinstance(r, dict):
+                continue
+            checks = r.get("checks", [])
+            reports.append({"file": p.name, "item": p.stem.split("-", 2)[-1], "verdict": r.get("verdict"),
+                            "summary": r.get("summary"), "design_problem": bool(r.get("design_problem")),
+                            "pass": sum(c.get("result") == "pass" for c in checks),
+                            "fail": sum(c.get("result") == "fail" for c in checks),
+                            "skipped": sum(c.get("result") == "skipped" for c in checks), "checks": checks})
+        bud = _json(d / "budget.json") or {}
+        out.append({"task_id": d.name, "reports": reports, "fix_loops": bud.get("fix_loops", 0), "fix_cap": bud.get("fix_cap"),
+                    "replans": bud.get("replans", 0)})
+    return {"tasks": out}

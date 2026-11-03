@@ -2,8 +2,8 @@ import json, os, stat, time, unittest
 from agentsys import config, ledger, logger, runner, schema, dashboard_data as dd
 from tests.base import TmpHome, fake_claude
 
-PLAN = {"summary": "s", "complexity": "trivial", "tech_choices": [], "test_strategy": "t", "risks": [],
-        "work_items": [{"id": "W1", "title": "t", "files": [], "acceptance_criteria": ["x"]}]}
+from tests.helpers import plan as _plan
+PLAN = _plan(1)
 ENV = {}
 
 
@@ -16,13 +16,53 @@ class SchemaTests(TmpHome):
         for p in schema.schemas_dir().glob("*.schema.json"):
             schema._validator(p.name.split(".")[0])
 
-    def test_pass_verdict_needs_evidence(self):
-        bad = {"verdict": "pass", "summary": "s", "checks": [{"name": "a", "result": "pass", "evidence": ""}]}
-        self.assertTrue(schema.errors_for("test_report", bad))
-        bad2 = {"verdict": "pass", "summary": "s", "checks": [{"name": "a", "result": "fail", "evidence": "boom"}]}
-        self.assertTrue(schema.errors_for("test_report", bad2))   # pass verdict with a failing check
-        ok = {"verdict": "pass", "summary": "s", "checks": [{"name": "a", "result": "pass", "evidence": "OK"}]}
+    def _rep(self, verdict="pass", **check):
+        c = {"name": "a", "result": "pass", "criterion_ids": ["W1.1"], "command": "pytest -q", "evidence": "OK"}
+        c.update(check)
+        return {"verdict": verdict, "summary": "s", "design_problem": False, "constraints_na": [], "checks": [c]}
+
+    def test_valid_report(self):
+        self.assertEqual(schema.errors_for("test_report", self._rep()), [])
+
+    def test_pass_with_skipped_is_rejected(self):
+        """Review finding: pass + skipped used to be accepted."""
+        self.assertTrue(schema.errors_for("test_report", self._rep("pass", result="skipped")))
+
+    def test_pass_check_needs_real_evidence_or_exit_code_zero(self):
+        self.assertTrue(schema.errors_for("test_report", self._rep(evidence="")))
+        self.assertTrue(schema.errors_for("test_report", self._rep(evidence="   ")))      # blank is not evidence
+        self.assertEqual(schema.errors_for("test_report", self._rep(evidence="", exit_code=0)), [])
+        self.assertTrue(schema.errors_for("test_report", self._rep(evidence="", exit_code=1)))
+        self.assertTrue(schema.errors_for("test_report", self._rep(command="  ")))
+        self.assertTrue(schema.errors_for("test_report", self._rep(criterion_ids=[])))
+
+    def test_failed_check_needs_diagnosis(self):
+        self.assertTrue(schema.errors_for("test_report", self._rep("fail", result="fail", evidence="x")))
+        ok = self._rep("fail", result="fail", evidence="x", severity="low", repro="r", probable_cause="unknown")
         self.assertEqual(schema.errors_for("test_report", ok), [])
+
+    def test_design_problem_needs_rationale(self):
+        r = self._rep("fail", result="fail", evidence="x", severity="low", repro="r", probable_cause="c")
+        r["design_problem"] = True
+        self.assertTrue(schema.errors_for("test_report", r))
+        r["design_rationale"] = "interface wrong"
+        self.assertEqual(schema.errors_for("test_report", r), [])
+
+    def test_blank_strings_rejected_in_plan_and_requirements(self):
+        p = _plan(1); p["work_items"][0]["acceptance_criteria"] = ["  "]
+        self.assertTrue(schema.errors_for("plan", p))
+        self.assertTrue(schema.errors_for("requirements", {"goal": " ", "constraints": [], "acceptance_criteria": ["x"], "risks": [], "unknowns": []}))
+
+    def test_plan_status_rules(self):
+        self.assertTrue(schema.errors_for("plan", {"status": "needs_input"}))
+        self.assertEqual(schema.errors_for("plan", {"status": "needs_input", "blocking_reason": "r", "questions": ["q?"]}), [])
+        self.assertTrue(schema.errors_for("plan", {"status": "ok"}))
+
+    def test_dev_report_status_rules(self):
+        self.assertTrue(schema.errors_for("dev_report", {"status": "ok", "summary": "s", "files_changed": []}))   # tests_run missing
+        self.assertTrue(schema.errors_for("dev_report", {"status": "blocked", "summary": "s", "files_changed": []}))
+        self.assertEqual(schema.errors_for("dev_report", {"status": "blocked", "summary": "s", "files_changed": [],
+                                                           "blocking_kind": "environment", "blocking_reason": "no node"}), [])
 
 
 class LoggerTests(TmpHome):
@@ -110,8 +150,17 @@ class RunnerTests(TmpHome):
                        "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'none'}))\n"
                        "print(json.dumps({'type':'result','is_error':False,'result':json.dumps({'ok':1}),"
                        "'num_turns':2,'usage':{'input_tokens':10,'output_tokens':5}}))\n")
-        r = runner.run_agent("developer", {"a": 1}, task_id="t3", backend=runner.CliBackend(), env=env, settings_paths=[])
+        r = runner.run_agent("reviewer", {"a": 1}, task_id="t3", backend=runner.CliBackend(), env=env, settings_paths=[])
         self.assertTrue(r.ok); self.assertEqual(r.output, {"ok": 1}); self.assertEqual(r.api_key_source, "none")
+
+    def test_cli_backend_records_tool_log(self):
+        env = fake_claude(self.home, "import json,sys\nsys.stdin.read()\n"
+            "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'none'}))\n"
+            "print(json.dumps({'type':'assistant','message':{'content':[{'type':'tool_use','id':'t1','name':'Bash','input':{'command':'pytest -q'}}]}}))\n"
+            "print(json.dumps({'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':'t1','content':[{'type':'text','text':'3 passed'}],'is_error':False}]}}))\n"
+            "print(json.dumps({'type':'result','is_error':False,'result':'{}','usage':{}}))\n")
+        r = runner.run_agent("reviewer", {}, task_id="t6", backend=runner.CliBackend(), env=env, settings_paths=[])
+        self.assertEqual(r.tool_log, [{"tool": "Bash", "command": "pytest -q", "output": "3 passed", "is_error": False}])
 
     def test_cli_backend_detects_usage_limit(self):
         env = fake_claude(self.home, "import sys\nsys.stdin.read()\nprint('Claude usage limit reached', file=sys.stderr)\nsys.exit(1)\n")

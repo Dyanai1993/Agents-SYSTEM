@@ -21,7 +21,7 @@ input,select{background:var(--bg);color:var(--fg);border:1px solid var(--line);b
 details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
 </style></head><body>
 <header><h1>Agent Dashboard</h1>
-<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button></nav>
+<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button></nav>
 <span class="mut" id="stamp"></span></header>
 <main id="m"></main>
 <script>
@@ -40,7 +40,7 @@ async function overview(){
   if(o.alerts.length){const c=el("div",{class:"card"},el("b",{},"Alerts"));o.alerts.slice(-5).forEach(a=>c.append(el("div",{class:"alert"},a.ts.slice(11,19)+" "+a.agent+": "+a.summary)));m.append(c);}
   const t=el("table",{},el("thead",{},el("tr",{},...["Task","State","Agent","Calls","Fix loops","Tokens (est)","Note"].map(h=>el("th",{},h)))));
   const tb=el("tbody");o.tasks.forEach(r=>tb.append(el("tr",{},
-    el("td",{},r.task_id+" — "+r.title),el("td",{},el("span",{class:"pill "+stCls(r.state)},r.state)),el("td",{},r.current_agent||"—"),
+    el("td",{style:"cursor:pointer;text-decoration:underline"},r.task_id+" — "+r.title),el("td",{},el("span",{class:"pill "+stCls(r.state)},r.state)),el("td",{},r.current_agent||"—"),
     el("td",{},r.calls+"/"+(r.call_cap??"?")),el("td",{},r.fix_loops+"/"+(r.fix_cap??"?")),el("td",{},r.tokens_est),
     el("td",{class:r.waiting_approval?"warn":"mut"},r.waiting_approval?"waiting for your approval":(r.limit_hits?"limit hit":"")))));
   t.append(tb);m.append(el("div",{class:"card"},o.tasks.length?t:"No tasks yet."));
@@ -73,7 +73,46 @@ async function messages(){
   }
   document.getElementById("list").replaceChildren(box.children.length?box:el("div",{class:"card"},"No messages."));
 }
-const views={overview,activity,messages};
+let curTask="";
+async function task(){
+  const o=await get("/api/overview");
+  if(!curTask&&o.tasks.length)curTask=o.tasks[0].task_id;
+  m.replaceChildren();
+  const sel=el("select",{});o.tasks.forEach(t=>{const op=el("option",{value:t.task_id},t.task_id+" — "+t.title);if(t.task_id===curTask)op.selected=true;sel.append(op);});
+  sel.onchange=()=>{curTask=sel.value;tick();};m.append(el("div",{class:"card"},sel));
+  if(!curTask){m.append(el("div",{class:"card"},"No tasks yet."));return;}
+  const t=await get("/api/task?id="+encodeURIComponent(curTask)),cur=t.state.state||"",b=t.budget;
+  const flow=el("div",{class:"card"});
+  t.states.forEach((s,i)=>{const p=el("span",{class:"pill",style:"margin-right:4px;"+(s===cur?"background:var(--acc);color:#fff":"")},s);flow.append(p);});
+  if(["blocked","failed","paused"].includes(cur))flow.append(el("span",{class:"pill bad"},cur));
+  if(t.state.waiting_approval)flow.append(el("span",{class:"pill warn"},"waiting for approval"));
+  m.append(flow);
+  const cnt=(n,v,c)=>el("div",{},n+": "+v+"/"+(c??"?"));
+  m.append(el("div",{class:"card"},cnt("Agent calls",b.calls??0,b.call_cap),cnt("Fix loops",b.fix_loops??0,b.fix_cap),cnt("Re-plans",b.replans??0,b.replan_cap),
+    el("div",{},"Tokens (est): "+(b.tokens_est??0)),el("div",{},"Work item: "+((t.progress.item??0)+1)+"/"+(t.plan?t.plan.work_items.length:"?")+" ("+(t.progress.step||"-")+")"),
+    el("div",{class:"mut"},t.has_status_report?"status_report.md exists in the task folder":"")));
+  const tb=el("table",{},el("tr",{},...["Time","Agent","Model","Type","Summary","Status"].map(h=>el("th",{},h))));
+  t.events.forEach(e=>tb.append(el("tr",{},el("td",{class:"mut"},e.ts.slice(11,19)),el("td",{},e.agent),el("td",{class:"mut"},e.model),el("td",{},el("span",{class:"pill"},e.event_type)),
+    el("td",{},e.summary),el("td",{class:e.status==="error"||e.status==="blocked"?"bad":"ok"},e.status))));
+  m.append(el("div",{class:"card"},tb));
+}
+async function quality(){
+  const r=await get("/api/quality");m.replaceChildren();
+  if(!r.tasks.length){m.append(el("div",{class:"card"},"No tasks yet."));return;}
+  r.tasks.forEach(t=>{
+    const c=el("div",{class:"card"},el("b",{},t.task_id),el("span",{class:"mut"},"  fix loops "+t.fix_loops+"/"+(t.fix_cap??"?")+", re-plans "+t.replans));
+    const trend=el("div",{style:"margin:6px 0"});
+    t.reports.forEach(x=>trend.append(el("span",{class:"pill "+(x.verdict==="pass"?"ok":x.verdict==="fail"?"bad":"warn"),style:"margin-right:4px",title:x.item},x.verdict==="pass"?"✔ "+x.item:"✖ "+x.item)));
+    c.append(trend);
+    const last=t.reports[t.reports.length-1];
+    if(last){const d=el("details",{},el("summary",{},"Latest report: "+last.verdict+" — "+last.summary+" ("+last.pass+" pass, "+last.fail+" fail, "+last.skipped+" skipped)"));
+      const tb=el("table",{},el("tr",{},...["Check","Result","Evidence"].map(h=>el("th",{},h))));
+      last.checks.forEach(k=>tb.append(el("tr",{},el("td",{},k.name),el("td",{class:k.result==="pass"?"ok":k.result==="fail"?"bad":"warn"},k.result),el("td",{},el("pre",{},(k.evidence||"").slice(0,600))))));
+      d.append(tb);c.append(d);}
+    else c.append(el("div",{class:"mut"},"No test reports yet."));
+    m.append(c);});
+}
+const views={overview,activity,messages,task,quality};
 async function tick(){try{await views[view]();document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
 tick();setInterval(()=>{if(!document.querySelector("details[open]")&&!document.activeElement.matches?.("input"))tick();},2500);

@@ -35,6 +35,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, d.query_events(q.get("task"), q.get("agent"), q.get("type"), q.get("q")))
             if u.path == "/api/messages":
                 return self._send(200, d.messages(q.get("task")))
+            if u.path == "/api/task":
+                t = d.task_detail(q.get("id"))
+                return self._send(200 if t else 404, t or {"error": "not found"})
+            if u.path == "/api/quality":
+                return self._send(200, d.quality())
             if u.path == "/api/payload":
                 p = d.payload(q.get("ref", ""))
                 return self._send(200 if p is not None else 404, p if p is not None else {"error": "not found"})

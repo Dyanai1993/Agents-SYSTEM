@@ -18,10 +18,11 @@ MODELS = {"haiku": "haiku", "sonnet": "sonnet", "opus": "opus"}
 # Role -> default model, tools, output schema. Agent prompts arrive in Phase 2.
 ROLES = {
     "orchestrator": {"model": "haiku", "tools": [], "schema": "requirements"},
-    "architect": {"model": "sonnet", "tools": ["Read", "Grep", "Glob", "Write"], "schema": "plan"},
-    "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": None},
+    "architect": {"model": "sonnet", "tools": ["Read", "Grep", "Glob"], "schema": "plan"},
+    "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": "dev_report"},
     "tester": {"model": "sonnet", "tools": ["Read", "Bash", "Grep", "Glob"], "schema": "test_report"},
     "reviewer": {"model": "haiku", "tools": ["Read"], "schema": None},
+    "smoke": {"model": "haiku", "tools": ["Bash"], "schema": None},   # live smoke test only
 }
 
 # Per-task caps for Max 5x (assumption).
@@ -34,3 +35,13 @@ WINDOW_5H_UNITS = 3_000_000
 WINDOW_7D_UNITS = 25_000_000
 # Refuse to start a large task above this share of the window.
 WINDOW_REFUSE_SHARE = 0.85
+
+# Per-role runtime limits (assumption). max_turns = tool rounds, timeout in seconds.
+ROLE_LIMITS = {
+    "orchestrator": {"max_turns": 3, "timeout_s": 120},
+    "architect": {"max_turns": 12, "timeout_s": 600},
+    "developer": {"max_turns": 30, "timeout_s": 1200},
+    "tester": {"max_turns": 25, "timeout_s": 900},
+    "reviewer": {"max_turns": 8, "timeout_s": 300},
+    "smoke": {"max_turns": 4, "timeout_s": 120},
+}
