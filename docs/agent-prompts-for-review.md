@@ -157,7 +157,7 @@ Every check lists the ids it verifies in `criterion_ids`. `evidence` is a SHORT 
 ## Rules
 1. Derive the expected behavior from the criteria and constraints, never from the implementation. Write each check so that it would FAIL for a relevant wrong implementation. A test with `assert True`, comparing a value to itself, a runner that finds 0 tests, or a mock that replaces the behavior under test is NOT a check.
 2. Cover EVERY criterion id with at least one check that really ran. Cover every constraint id with a passing check, or list it in `constraints_na` with a reason.
-3. Every `pass` or `fail` check names a `command` that you really ran with the Bash tool. The orchestrator compares it with the tool log. A command that was not run makes the whole report invalid.
+3. Every `pass` or `fail` check must be backed by a Bash run. The orchestrator compares your `command` and your `evidence` with the real tool log. You may verify several checks in ONE script that prints a labelled line per check: then repeat that script's command in each check and quote the labelled line as `evidence` (at least 6 characters, copied from the real output). Evidence that does not appear in the tool output makes the whole report invalid.
 4. Add adversarial checks only where the risk justifies them (bad input, boundaries, repeated calls). Zero to five. Put test files in `qa_tests/`. Do NOT edit product code or the developer's tests: if you do, your report is discarded.
 5. Decision order for `verdict`: a demonstrated product failure -> "fail". Otherwise a required check you could not run -> "blocked" (add it as a check with result "skipped" and the reason). Otherwise "pass". A build that does not start because of the code is a "fail", not "blocked". A missing tool or broken environment is "blocked". The orchestrator recomputes the verdict from your checks.
 6. For a failed check give `severity`, `repro` and `probable_cause`. If the cause is unknown, write "unknown" and what you tried.
@@ -796,6 +796,7 @@ If the workspace is empty or nothing can run, return a check with result "skippe
 
 The prompts ask for these things. This module enforces them.
 """
+import difflib
 import os
 import re
 
@@ -856,20 +857,65 @@ def derive_verdict(report: dict, expected_ids, constraint_ids):
     return ("blocked" if reasons else "pass"), reasons
 
 
+MIN_EVIDENCE_CHARS = 6
+
+
+_PATH_TOKEN = re.compile(r"\S*[/\\]\S*|\b[A-Za-z]:\S*")
+
+
+def _squash(text: str) -> str:
+    """Drop whitespace and mask path-like tokens.
+
+    Git Bash on Windows rewrites /tmp/f.txt to C:/Users/.../f.txt in the output, so a quoted
+    path never equals the real one. Both sides are masked the same way: the numbers and words
+    around the path must still match, the path itself does not.
+    """
+    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or ""))
+
+
+MIN_SHARE = 0.75
+
+
+def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
+    """True when the evidence excerpt is really in a tool output.
+
+    Models add labels around real output ("stderr: ...", "exit code 1, ..."), shorten it with "...",
+    or quote a path that Git Bash rewrote. So the test is: the longest run of evidence characters that
+    appears unchanged in the output must be at least 6 characters AND 75% of the evidence.
+    Short evidence ('OK', '0') can never pass this: it needs a matching command instead.
+    """
+    ev = _squash(re.sub(r"\.\.\.|\u2026", "", evidence or ""))      # '...' marks a cut, not content
+    if len(ev) < MIN_EVIDENCE_CHARS or not outputs_squashed:
+        return False
+    m = difflib.SequenceMatcher(None, ev, outputs_squashed, autojunk=False).find_longest_match(0, len(ev), 0, len(outputs_squashed))
+    return m.size >= max(MIN_EVIDENCE_CHARS, MIN_SHARE * len(ev))
+
+
 def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
-    """Every pass/fail check must name a command that really ran (from the backend's tool log)."""
+    """Every pass/fail check must be backed by a real Bash run in the backend's tool log.
+
+    A check is backed when EITHER its command text matches a logged Bash command
+    OR its evidence excerpt is found in the output of a logged Bash call (see _evidence_in_output).
+    The second rule allows one script to verify several checks, while fabricated output is still caught.
+    """
     if strict is None:
         strict = os.environ.get("AGENTSYS_EVIDENCE", "strict") != "warn"
     if tool_log is None:
         return ["backend gave no tool log: evidence cannot be verified"] if strict else []
-    ran = [norm(t.get("command", "")) for t in tool_log if t.get("tool") == "Bash"]
+    bash = [t for t in tool_log if t.get("tool") == "Bash"]
+    ran = [norm(t.get("command", "")) for t in bash]
+    outputs = _squash(" ".join(t.get("output", "") for t in bash))
     errs = []
     for c in report["checks"]:
         if c["result"] == "skipped":
             continue
         cmd = norm(c["command"])
-        if not cmd or not any(cmd in r or (r and r in cmd) for r in ran):
-            errs.append(f"check '{c['name']}': command was not run (not in tool log)")
+        by_command = bool(cmd) and any(cmd in r or (r and r in cmd) for r in ran)
+        if by_command or _evidence_in_output(c["evidence"], outputs):
+            continue
+        shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"
+        errs.append(f"check '{c['name']}': neither its command nor its evidence appears in the tool log. "
+                    f"Claimed command: {cmd[:120]!r}. Logged Bash calls ({len(ran)}): {shown}")
     return errs
 
 

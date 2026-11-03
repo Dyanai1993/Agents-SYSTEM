@@ -123,7 +123,7 @@ class LoopTests(TmpHome):
     def test_fabricated_evidence_is_rejected(self):
         fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass}, tool_logs={"tester": []})
         r = go("t1", fb)
-        self.assertEqual(r["status"], "blocked"); self.assertIn("not run", r["message"])
+        self.assertEqual(r["status"], "blocked"); self.assertIn("appears in the tool log", r["message"])
 
     def test_missing_tool_log_fails_closed_unless_warn_mode(self):
         fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass})
@@ -279,10 +279,46 @@ class SemanticsTests(unittest.TestCase):
         r = report("pass", [_check("a", "pass", ["W1.1"])])
         self.assertEqual(semantics.derive_verdict(r, ["W1.1"], [])[0], "pass")
 
+    def test_one_script_may_back_several_checks_through_its_output(self):
+        """Live run T-0001: 3 tool calls, more checks. Batched scripts must be accepted when the output proves the run."""
+        log = [{"tool": "Bash", "command": "bash qa.sh", "output": "CHECK missing_file: stderr=wc.py: nope.txt: No such file exit=1\nCHECK empty_file: 0 0 0 empty.txt"}]
+        r = report("pass", [_check("missing", "pass", ["W1.1"], command="python wc.py nope.txt", evidence="stderr=wc.py: nope.txt: No such file exit=1"),
+                            _check("empty", "pass", ["W1.2"], command="python wc.py empty.txt", evidence="0 0 0 empty.txt")])
+        self.assertEqual(semantics.evidence_errors(r, log, strict=True), [])
+
+    def test_windows_translated_paths_do_not_break_evidence(self):
+        """Live run T-0001: the tester quoted /tmp/f.txt, Git Bash printed C:/Users/.../f.txt."""
+        log = [{"tool": "Bash", "command": "f=$(mktemp); printf 'a b\\nc d e\\n' > $f; python wc.py $f",
+                "output": "2 5 24 C:/Users/dyana/AppData/Local/Temp/tmp.x9/f.txt\nwc.py: nope.txt: No such file or directory"}]
+        r = report("pass", [_check("two lines", "pass", ["W1.1"], command="python wc.py /tmp/f.txt", evidence="2 5 24 /tmp/f.txt"),
+                            _check("missing", "pass", ["W1.2"], command="python wc.py nope.txt; echo $?",
+                                   evidence="stderr: wc.py: nope.txt: No such file or directory")])
+        self.assertEqual(semantics.evidence_errors(r, log, strict=True), [])
+        wrong_numbers = report("pass", [_check("two lines", "pass", ["W1.1"], command="python wc.py /tmp/other.txt", evidence="9 9 99 /tmp/other.txt")])
+        self.assertTrue(semantics.evidence_errors(wrong_numbers, log, strict=True))   # masking the path never hides wrong numbers
+
+    def test_fabricated_or_short_evidence_is_still_rejected(self):
+        log = [{"tool": "Bash", "command": "python -m unittest", "output": "Ran 3 tests OK"}]
+        invented = report("pass", [_check("x", "pass", ["W1.1"], command="python other.py", evidence="all 12 widgets verified fine")])
+        self.assertTrue(semantics.evidence_errors(invented, log, strict=True))
+        short = report("pass", [_check("x", "pass", ["W1.1"], command="python other.py", evidence="OK")])
+        self.assertTrue(semantics.evidence_errors(short, log, strict=True))         # 'OK' appears in the output but proves nothing (< 6 chars)
+        exit_only = report("pass", [_check("x", "pass", ["W1.1"], command="python other.py", evidence="", exit_code=0)])
+        self.assertTrue(semantics.evidence_errors(exit_only, log, strict=True))     # exit_code needs a matching command
+        labelled_fake = report("pass", [_check("x", "pass", ["W1.1"], command="zzz", evidence="stderr: foo.py: x.txt: No such file or directory")])
+        log2 = [{"tool": "Bash", "command": "python wc.py nope.txt", "output": "wc.py: nope.txt: No such file or directory"}]
+        self.assertTrue(semantics.evidence_errors(labelled_fake, log2, strict=True))  # only the generic words match: 63% < 75%
+        shortened = report("pass", [_check("x", "pass", ["W1.1"], command="zzz", evidence="Ran 3 tests ... OK")])
+        self.assertEqual(semantics.evidence_errors(shortened, log, strict=True), [])   # real output, shortened with '...' 
+
     def test_command_matching_ignores_whitespace(self):
         r = report("pass", [_check("a", "pass", ["W1.1"], command="python  -m   unittest")])
         self.assertEqual(semantics.evidence_errors(r, [{"tool": "Bash", "command": "python -m unittest"}], strict=True), [])
-        self.assertTrue(semantics.evidence_errors(r, [{"tool": "Read", "command": ""}], strict=True))
+        err = semantics.evidence_errors(r, [{"tool": "Read", "command": ""}], strict=True)
+        self.assertTrue(err)
+        self.assertIn("python  -m   unittest".replace("  ", " ").replace("  ", " "), err[0])      # shows what was claimed
+        err = semantics.evidence_errors(r, [{"tool": "Bash", "command": "ls -la"}], strict=True)
+        self.assertIn("ls -la", err[0])                                                           # and what was really run
 
 
 class PromptTests(TmpHome):
