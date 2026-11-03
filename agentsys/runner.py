@@ -291,6 +291,6 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
                 payload={"errors": errs, "output": res.output})
             return res
     log("message", f"{role} -> orchestrator ({spec['schema'] or 'free text'})", from_=role, to="orchestrator",
-        tokens_estimate=tokens, payload=res.output)
+        payload=res.output)     # tokens are counted once per call: on agent_end (or on the error event)
     log("agent_end", f"{role} done in {res.duration_s:.1f}s", tokens_estimate=tokens)
     return res

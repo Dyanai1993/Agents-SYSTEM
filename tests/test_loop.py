@@ -148,6 +148,33 @@ class LoopTests(TmpHome):
         r = go("t1", fb)
         self.assertEqual(r["status"], "blocked"); self.assertIn("final regression failed", r["message"])
 
+    def test_tokens_are_counted_once_per_call(self):
+        """Live data: timeline.py showed 2x the real cost because message and agent_end both carried tokens."""
+        from agentsys import dashboard_data as dd
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass})
+        go("t1", fb)
+        logged = sum(e["tokens_estimate"] for e in dd.all_events("t1")[0])
+        self.assertEqual(logged, ledger.Ledger("t1").data["tokens_est"])
+        self.assertGreater(logged, 0)
+
+    def test_failed_call_tokens_are_counted_once(self):
+        from agentsys import dashboard_data as dd
+        go("t1", runner.FakeBackend({"architect": {"bad": 1}}))
+        self.assertEqual(sum(e["tokens_estimate"] for e in dd.all_events("t1")[0]), ledger.Ledger("t1").data["tokens_est"])
+
+    def test_task_is_refused_when_the_window_is_nearly_used(self):
+        import time
+        w = ledger.Window()
+        w.add("other", "developer", "sonnet", int(config.WINDOW_5H_UNITS * 0.9))
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass})
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "blocked"); self.assertIn("window nearly used", r["message"])
+        self.assertEqual(roles(fb), ["architect"])          # no build work started
+
+    def test_estimate_follows_call_count(self):
+        self.assertEqual(ledger.estimate_task_units(1), 4 * config.TOKENS_PER_CALL * config.FIX_MARGIN)
+        self.assertGreater(ledger.estimate_task_units(3), ledger.estimate_task_units(1))
+
     # ---------------------------------------------------------------- explicit block protocol
     def test_architect_needs_input(self):
         fb = runner.FakeBackend({"architect": NEEDS})
