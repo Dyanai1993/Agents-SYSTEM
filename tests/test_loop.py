@@ -85,6 +85,37 @@ class LoopTests(TmpHome):
         r = go("t1", runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": tester}), REQ_C)
         self.assertEqual(r["status"], "needs_input"); self.assertIn("constraint C1", r["message"])
 
+    def test_tester_that_forgot_a_constraint_gets_one_chance_to_complete(self):
+        """Live run T-0010: the summary said 'both constraints verified' but no check carried C1/C2."""
+        def forgetful(prompt):
+            _, ids, _ = _item(prompt)
+            return report("pass", [_check("all", "pass", ids)], summary="All criteria and both constraints verified")
+        def complete(prompt):
+            p = json.loads(prompt)
+            assert "rejection" in p and any("C1" in g for g in p["rejection"]["gaps"])
+            _, ids, cons = _item(prompt)
+            return report("pass", [_check("all", "pass", ids), _check("stdlib only", "pass", cons)])
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": [forgetful, complete, t_pass]})
+        r = go("t1", fb, REQ_C)
+        self.assertEqual(r["status"], "ready_for_review")
+        self.assertEqual(roles(fb).count("tester"), 3)               # item (2 tries) + final
+        from agentsys import dashboard_data as dd
+        self.assertTrue([e for e in dd.all_events("t1")[0] if "incomplete" in e["summary"]])
+
+    def test_tester_that_stays_incomplete_ends_in_needs_input_after_exactly_two_tries(self):
+        def forgetful(prompt):
+            _, ids, _ = _item(prompt)
+            return report("pass", [_check("all", "pass", ids)])
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": forgetful})
+        r = go("t1", fb, REQ_C)
+        self.assertEqual(r["status"], "needs_input"); self.assertIn("constraint C1", r["message"])
+        self.assertEqual(roles(fb).count("tester"), 2)               # one retry, never a loop
+
+    def test_skipped_checks_are_not_retried(self):
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_blocked})
+        go("t1", fb)
+        self.assertEqual(roles(fb).count("tester"), 1)               # a tool/environment gap is a real block
+
     def test_plan_that_drops_a_requirement_criterion_is_rejected(self):
         req = dict(REQ, acceptance_criteria=["a", "b"])
         r = go("t1", runner.FakeBackend({"architect": plan(1)}), req)       # plan covers AC1 only

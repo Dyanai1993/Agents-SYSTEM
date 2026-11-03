@@ -20,3 +20,7 @@
 
 ## Still unverified
 Everything above runs against the fake backend and a fake `claude` binary only. The first live run must confirm: the real `stream-json` shape (tool_use / tool_result), `apiKeySource`, and that the tool-log check does not reject honest runs.
+
+## Live run T-0010 (orchestrator, intake from plain text)
+The tester wrote "all constraints verified" in `summary` but no check carried the constraint ids, so the report was rejected and the task stopped with `needs_input`. The user could not answer anything: it was a tester omission.
+Fix: coverage gaps without skipped checks trigger exactly ONE completion call to the tester (with the gap list). Still incomplete -> `needs_input` naming the gap. Skipped checks (tool or environment problems) are never retried. The tester prompt now shows a constraint check in its example and says that only `checks` and `constraints_na` count.

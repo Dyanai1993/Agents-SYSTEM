@@ -142,4 +142,5 @@ def process_test_report(report, expected_ids, constraint_ids, tool_log):
     report["verdict"] = derived
     if reasons and derived == "blocked":
         report["summary"] = (report["summary"] + " | " + "; ".join(reasons))[:600]
+        report["gaps"] = reasons
     return []

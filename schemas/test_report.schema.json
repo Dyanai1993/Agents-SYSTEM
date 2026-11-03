@@ -204,6 +204,13 @@
           }
         ]
       }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Written by the orchestrator: coverage gaps found in this report"
     }
   },
   "allOf": [
