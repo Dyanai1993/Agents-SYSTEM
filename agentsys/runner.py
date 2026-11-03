@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import billing_guard, config, logger, prompts, schema
+from . import approvals, billing_guard, config, logger, prompts, schema
 from .ledger import BudgetExceeded, Ledger, Window
 
 
@@ -238,6 +238,8 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
             system_prompt = None
 
     billing_guard.run_guard(env=env, settings_paths=settings_paths)   # every call, not only at startup
+    if model == "opus":
+        approvals.require_opus(task_id)                               # Opus only with a human decision file
     ledger.check_can_call()                                           # raises BudgetExceeded
 
     prompt = json.dumps(input, ensure_ascii=False, indent=2) if not isinstance(input, str) else input

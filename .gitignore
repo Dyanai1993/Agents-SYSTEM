@@ -6,3 +6,6 @@ state/*.json
 evals/results/*.json
 !evals/results/.gitkeep
 .env
+approvals/
+deliveries/
+queue/

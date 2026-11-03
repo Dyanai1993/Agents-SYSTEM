@@ -21,7 +21,7 @@ input,select{background:var(--bg);color:var(--fg);border:1px solid var(--line);b
 details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
 </style></head><body>
 <header><h1>Agent Dashboard</h1>
-<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button></nav>
+<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="alerts">Alerts</button></nav>
 <span class="mut" id="stamp"></span></header>
 <main id="m"></main>
 <script>
@@ -30,6 +30,7 @@ let view="overview";
 const m=document.getElementById("m");
 const el=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k==="class")e.className=a[k];else e.setAttribute(k,a[k]);}c.flat().forEach(x=>e.append(x instanceof Node?x:document.createTextNode(String(x??""))));return e;};
 const get=async u=>(await fetch(u)).json();
+const post=async(u,b)=>{const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json","X-Agentsys":"1"},body:JSON.stringify(b)});return {ok:r.ok,body:await r.json()};};
 const stCls=s=>["done"].includes(s)?"ok":["blocked","failed"].includes(s)?"bad":"";
 function bar(p){const b=el("div",{class:"bar"}),i=el("i");i.style.width=Math.min(100,Math.round(p*100))+"%";b.append(i);return b;}
 async function overview(){
@@ -86,7 +87,10 @@ async function task(){
   t.states.forEach((s,i)=>{const p=el("span",{class:"pill",style:"margin-right:4px;"+(s===cur?"background:var(--acc);color:#fff":"")},s);flow.append(p);});
   if(["blocked","failed","paused"].includes(cur))flow.append(el("span",{class:"pill bad"},cur));
   if(t.state.waiting_approval)flow.append(el("span",{class:"pill warn"},"waiting for approval"));
-  m.append(flow);
+  const ctl=el("div",{class:"card"});
+  [["pause","Pause"],["resume","Resume"],["stop","Stop"]].forEach(([a,l])=>{const b=el("button",{style:"margin-right:6px"},l);b.onclick=async()=>{if(a==="stop"&&!confirm("Stop task "+curTask+"?"))return;const r=await post("/api/control",{task_id:curTask,action:a});if(!r.ok)alert(r.body.error);tick();};ctl.append(b);});
+  ctl.append(el("span",{class:"mut"},"  (writes a control file; the loop reads it before every agent call)"));
+  m.append(flow,ctl);
   const cnt=(n,v,c)=>el("div",{},n+": "+v+"/"+(c??"?"));
   m.append(el("div",{class:"card"},cnt("Agent calls",b.calls??0,b.call_cap),cnt("Fix loops",b.fix_loops??0,b.fix_cap),cnt("Re-plans",b.replans??0,b.replan_cap),
     el("div",{},"Tokens (est): "+(b.tokens_est??0)),el("div",{},"Work item: "+((t.progress.item??0)+1)+"/"+(t.plan?t.plan.work_items.length:"?")+" ("+(t.progress.step||"-")+")"),
@@ -112,8 +116,41 @@ async function quality(){
     else c.append(el("div",{class:"mut"},"No test reports yet."));
     m.append(c);});
 }
-const views={overview,activity,messages,task,quality};
-async function tick(){try{await views[view]();document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
+async function approvals(){
+  const r=await get("/api/approvals");m.replaceChildren();
+  const c=el("div",{class:"card"},el("b",{},"Pending ("+r.pending.length+")"));
+  if(!r.pending.length)c.append(el("div",{class:"mut"},"Nothing is waiting for you."));
+  r.pending.forEach(a=>{
+    const box=el("div",{class:"msg"},el("div",{},el("span",{class:"pill warn"},a.gate)," ",a.task_id+" — "+a.task_title+" ["+a.task_state+"]"),el("pre",{},a.context));
+    const note=el("input",{placeholder:"note (optional)"});
+    [["approved","Approve"],["rejected","Reject"]].forEach(([d,l])=>{const b=el("button",{style:"margin:6px 6px 0 0"},l);b.onclick=async()=>{const x=await post("/api/approval/decide",{id:a.id,decision:d,note:note.value});if(!x.ok)alert(x.body.error);tick();};box.append(b);});
+    box.append(note);c.append(box);});
+  m.append(c);
+  const hist=el("table",{},el("tr",{},...["When","Task","Gate","Decision","Note"].map(h=>el("th",{},h))));
+  r.history.forEach(x=>hist.append(el("tr",{},el("td",{class:"mut"},(x.decided_at||"").slice(0,16)),el("td",{},x.task_id),el("td",{},x.gate),el("td",{class:x.decision==="approved"?"ok":"bad"},x.decision),el("td",{},x.note))));
+  m.append(el("div",{class:"card"},el("b",{},"History"),hist));
+}
+async function usage(){
+  const r=await get("/api/usage"),w=r.window;m.replaceChildren();
+  m.append(el("div",{class:"card"},el("b",{},"Window (estimate)"),el("div",{},"5 hours: "+Math.round(w.share_5h*100)+"%"),bar(w.share_5h),el("div",{},"7 days: "+Math.round(w.share_7d*100)+"%"),bar(w.share_7d),el("div",{class:"mut"},r.note)));
+  const agg=(t,o)=>{const tb=el("table",{},el("tr",{},el("th",{},t),el("th",{},"Tokens (7 days)")));Object.entries(o).forEach(([k,v])=>tb.append(el("tr",{},el("td",{},k),el("td",{},v))));return el("div",{class:"card"},tb);};
+  m.append(agg("Agent",r.by_agent_7d),agg("Model",r.by_model_7d));
+  const tb=el("table",{},el("tr",{},...["Task","Calls","Fix loops","Re-plans","Tokens"].map(h=>el("th",{},h))));
+  r.tasks.forEach(t=>tb.append(el("tr",{},el("td",{},t.task_id),el("td",{},t.calls+"/"+t.call_cap),el("td",{},t.fix_loops+"/"+t.fix_cap),el("td",{},t.replans+"/"+t.replan_cap),el("td",{},t.tokens_est))));
+  m.append(el("div",{class:"card"},tb));
+  const hits=el("div",{class:"card"},el("b",{},"Limit hits"));
+  if(!r.limit_hits.length)hits.append(el("div",{class:"mut"},"None."));
+  r.limit_hits.forEach(h=>hits.append(el("div",{class:"alert"},h.ts+" "+h.task_id+": "+h.info)));m.append(hits);
+}
+async function alerts(){
+  const r=await get("/api/alerts");m.replaceChildren();
+  const c=el("div",{class:"card"},el("b",{},"Alerts ("+r.items.length+")"));
+  if(!r.items.length)c.append(el("div",{class:"ok"},"All clear."));
+  r.items.forEach(a=>c.append(el("div",{class:"alert",style:a.level==="warn"?"border-color:var(--warn)":""},(a.task_id?a.task_id+": ":"")+a.text)));
+  m.append(c);
+}
+const views={overview,activity,messages,task,quality,approvals,usage,alerts};
+async function tick(){try{const ap=await get("/api/approvals");const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view]();document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
 tick();setInterval(()=>{if(!document.querySelector("details[open]")&&!document.activeElement.matches?.("input"))tick();},2500);
 </script></body></html>
