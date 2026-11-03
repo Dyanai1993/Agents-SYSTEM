@@ -224,6 +224,15 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits):
         def post(res):
             return semantics.process_test_report(res.output, expected, constraint_ids, res.tool_log)
         rep = agent("tester", payload, post_process=post)
+        # A report that only MISSES coverage (nothing skipped, nothing failed) is a tester omission, not a question for
+        # the user. Ask the tester once to complete it. One extra call is cheaper than stopping the whole task.
+        if rep["verdict"] == "blocked" and rep.get("gaps") and not any(c["result"] == "skipped" for c in rep["checks"]):
+            logger.log_event(task_id, "orchestrator", "decision", f"tester report incomplete: asking once to complete it ({len(rep['gaps'])} gaps)",
+                             status="pending", payload={"gaps": rep["gaps"]})
+            rep = agent("tester", dict(payload, rejection={"gaps": rep["gaps"], "instruction":
+                        "Your previous report was incomplete. Run the missing checks now and report them in `checks`, with the ids in "
+                        "`criterion_ids`. Mark a constraint not applicable only in `constraints_na` with a reason. "
+                        "Statements in `summary` do not count."}), post_process=post)
         mutated = [f for f in _changed(ws) if not _is_qa(f)]
         if mutated:                                  # tester must not edit product code
             _git(ws, "checkout", "--", ".", f":(exclude){QA_DIR}")
