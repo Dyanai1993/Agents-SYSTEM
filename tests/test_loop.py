@@ -316,3 +316,23 @@ class PromptTests(TmpHome):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SmokeTests(TmpHome):
+    def test_smoke_logic_with_fake_backend(self):
+        from agentsys import smoke
+        fb = runner.FakeBackend({"smoke": {"ok": True}}, tool_logs={"smoke": [{"tool": "Bash", "command": "echo agentsys-smoke", "output": "agentsys-smoke", "is_error": False}]})
+        orig = runner.billing_guard.run_guard
+        runner.billing_guard.run_guard = lambda **kw: []      # the container has ANTHROPIC_BASE_URL; logic only here
+        try:
+            ok, lines = smoke.smoke(fb)
+        finally:
+            runner.billing_guard.run_guard = orig
+        self.assertTrue(ok, lines)
+        fb2 = runner.FakeBackend({"smoke": {"ok": True}}, api_key_source="user")
+        runner.billing_guard.run_guard = lambda **kw: []
+        try:
+            with self.assertRaises(runner.billing_guard.BillingGuardError):
+                smoke.smoke(fb2)                                  # API-key credential source is fatal
+        finally:
+            runner.billing_guard.run_guard = orig

@@ -22,6 +22,7 @@ ROLES = {
     "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": "dev_report"},
     "tester": {"model": "sonnet", "tools": ["Read", "Bash", "Grep", "Glob"], "schema": "test_report"},
     "reviewer": {"model": "haiku", "tools": ["Read"], "schema": None},
+    "smoke": {"model": "haiku", "tools": ["Bash"], "schema": None},   # live smoke test only
 }
 
 # Per-task caps for Max 5x (assumption).
@@ -42,4 +43,5 @@ ROLE_LIMITS = {
     "developer": {"max_turns": 30, "timeout_s": 1200},
     "tester": {"max_turns": 25, "timeout_s": 900},
     "reviewer": {"max_turns": 8, "timeout_s": 300},
+    "smoke": {"max_turns": 4, "timeout_s": 120},
 }

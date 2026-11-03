@@ -1,0 +1,26 @@
+"""One cheap live check (1 Haiku call). Proves: subscription credential source, tool log format, usage capture."""
+import tempfile
+import time
+
+from . import runner
+
+PROMPT = ('Use the Bash tool to run exactly: echo agentsys-smoke\n'
+          'Then reply with ONLY this JSON: {"ok": true}')
+
+
+def smoke(backend):
+    """Return (ok, lines). Never raises for expected failures."""
+    lines = []
+    with tempfile.TemporaryDirectory() as tmp:
+        res = runner.run_agent("smoke", PROMPT, task_id=f"smoke-{int(time.time())}", backend=backend, cwd=tmp)
+    checks = [
+        ("credential source is subscription", res.api_key_source in ("none", "oauth"), f"apiKeySource={res.api_key_source!r}"),
+        ("agent answered", res.ok, res.error or "ok"),
+        ("tool log captured", bool(res.tool_log), f"{len(res.tool_log or [])} tool call(s)"),
+        ("bash command seen in tool log", any("agentsys-smoke" in (t.get("command") or "") for t in (res.tool_log or [])), "echo agentsys-smoke"),
+        ("tool output captured", any("agentsys-smoke" in (t.get("output") or "") for t in (res.tool_log or [])), "output text"),
+        ("usage captured", sum(res.usage.values()) > 0 if res.usage else False, str(res.usage)),
+    ]
+    for name, ok, detail in checks:
+        lines.append(f"{'PASS' if ok else 'FAIL'}  {name}  ({detail})")
+    return all(ok for _, ok, _ in checks), lines
