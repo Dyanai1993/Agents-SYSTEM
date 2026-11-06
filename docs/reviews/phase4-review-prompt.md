@@ -3,6 +3,7 @@
 ## Where the code is
 - Repository: https://github.com/Dyanai1993/Agents-SYSTEM
 - Branch to review: https://github.com/Dyanai1993/Agents-SYSTEM/tree/claude/phase4-memory-evals
+- Pull request (diff and discussion): https://github.com/Dyanai1993/Agents-SYSTEM/pull/7
 - Compare with main: https://github.com/Dyanai1993/Agents-SYSTEM/compare/main...claude/phase4-memory-evals
 Review the branch above, not main. Files are listed relative to the repository root; each one opens at `https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/<path>`.
 

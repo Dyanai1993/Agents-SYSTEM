@@ -12,7 +12,24 @@
   "evals/run_evals.py real needs --yes, runs sequentially, stops at a token budget, and records pass, fix loops, calls, tokens and seconds per task",
   "The dashboard Learning view shows lessons, proposals with state, real eval runs and a before/after comparison with regressions"
  ],
- "files": ["agentsys/memory.py", "agentsys/learning.py", "agentsys/loop.py", "agentsys/orchestrator.py", "agentsys/dashboard_data.py", "evals/run_evals.py", ".claude/agents/reviewer.md", ".claude/agents/tester.md", ".claude/agents/developer.md", ".claude/agents/architect.md", "schemas/lesson.schema.json", "schemas/proposals.schema.json", "dashboard/index.html", "scripts/orch.py", "scripts/gen_review_prompt.py", "tests/test_phase4.py"],
+ "files": [
+  "agentsys/memory.py",
+  "agentsys/learning.py",
+  "agentsys/loop.py",
+  "agentsys/orchestrator.py",
+  "agentsys/dashboard_data.py",
+  "evals/run_evals.py",
+  ".claude/agents/reviewer.md",
+  ".claude/agents/tester.md",
+  ".claude/agents/developer.md",
+  ".claude/agents/architect.md",
+  "schemas/lesson.schema.json",
+  "schemas/proposals.schema.json",
+  "dashboard/index.html",
+  "scripts/orch.py",
+  "scripts/gen_review_prompt.py",
+  "tests/test_phase4.py"
+ ],
  "known_weaknesses": [
   "The reviewer prompt, lesson injection and the real eval runner were NEVER run against a real model. Proposal quality from Haiku is unknown",
   "LLM runs are noisy. The gate compares ONE before run with ONE after run, so a regression can be luck and an improvement can be luck. The 25% token threshold is arbitrary",
@@ -38,5 +55,6 @@
   "Is a single before/after eval run a defensible gate? What is the cheapest change that makes it more trustworthy (repeat runs, per-task thresholds, paired comparison)?",
   "Does anything in the eval runner or learning code spend quota without --yes, loop on calls, or bypass the billing guard and the budget caps?",
   "Which metric would show that the improvement loop actually improves anything, and is it recorded?"
- ]
+ ],
+ "pr": 7
 }
