@@ -142,6 +142,10 @@ def deliver(task_id, target_repo=None):
     result = {"patches_dir": str(out), "patches": patches, "branch": None}
     if target_repo:
         repo = Path(target_repo)
+        if not repo.is_dir():
+            raise RuntimeError(f"target repo {repo} does not exist")
+        if loop._git(repo, "rev-parse", "--is-inside-work-tree").returncode:
+            raise RuntimeError(f"target repo {repo} is not a git repository")
         branch = f"agentsys/{task_id}"
         if loop._git(repo, "status", "--porcelain").stdout.strip():
             raise RuntimeError(f"target repo {repo} has uncommitted changes: not touching it")

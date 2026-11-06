@@ -129,6 +129,22 @@ class OrchestratorTests(TmpHome):
         self.assertEqual(e["status"], "blocked"); self.assertIn("uncommitted", e["note"])
         self.assertEqual((repo / "README").read_text(), "dirty")
 
+    def test_missing_target_repo_blocks_cleanly_instead_of_crashing(self):
+        missing = self.home / "does-not-exist"
+        orchestrator.submit("t1", requirements=REQ, target_repo=missing)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f); approvals.decide(approvals.pending()[0]["id"], "approved")
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "blocked"); self.assertIn("does not exist", e["note"])
+
+    def test_target_path_that_is_not_a_git_repo_blocks_cleanly(self):
+        not_git = self.home / "plain-folder"; not_git.mkdir()
+        orchestrator.submit("t1", requirements=REQ, target_repo=not_git)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f); approvals.decide(approvals.pending()[0]["id"], "approved")
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "blocked"); self.assertIn("not a git repository", e["note"])
+
     def test_rejected_merge(self):
         orchestrator.submit("t1", requirements=REQ)
         f = fb(); proc("t1", f)
