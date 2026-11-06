@@ -1,7 +1,7 @@
 # Handoff prompt: continue the Agents-SYSTEM project in another session
 
 Paste everything below the line into a new Claude Code session opened in the repository folder.
-Last updated: 2026-11-06. Keep this file current: update it at the end of every work session.
+Last updated: 2026-11-06 (session 2). Keep this file current: update it at the end of every work session.
 
 ---
 
@@ -23,9 +23,11 @@ You continue a project that another session built with me (the user). Read this 
 
 ## 3. Environment
 - I use Windows and PowerShell. There is no `make`: use the plain commands in `README.md`. Give me ONE command per line in separate code blocks (pasted multi-line blocks got concatenated before).
-- I run commands on my machine in `C:\Users\dyana\FDE_Agents-runs\Agents-SYSTEM` and paste the output to you. Cloud sessions cannot reach my computer (Remote Control folder access is not available on my account).
-- In a cloud container the guard fails because `ANTHROPIC_BASE_URL` is set. Run tests there with `env -u ANTHROPIC_BASE_URL python3 -m unittest discover -s tests -t .`
+- I run commands on my machine in `C:\Users\dyana\FDE_Agents-runs\Agents-SYSTEM` and paste the output to you.
+- A Claude Code cloud/remote session can turn out to share this exact machine and working tree with me (same hostname, same checkout) - check with `hostname`/`whoami`/`pwd` before assuming otherwise. That does NOT mean it can run live agent tasks: the session's own shell env usually has `ANTHROPIC_BASE_URL` (sometimes `ANTHROPIC_API_KEY`) set for its own unrelated purposes, which the billing guard correctly fails closed on. Never unset it to force a live run through - that env var's presence is exactly the signal the guard exists to catch. Any `run-next` / `evals/run_evals.py real` / anything that spends subscription usage still has to be typed by me, in my own terminal, where the env is clean. You can still read/edit/commit/push in that shared tree, and read my terminal with `mcp__terminal__read_terminal` instead of waiting for a paste.
+- In a cloud container, plain `python -m unittest` (fake backend, no live billing) fails the guard too for the same reason. Run it with `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY python3 -m unittest discover -s tests -t .` there - that's fine, no real calls happen.
 - `git push` from the cloud can hang: use `timeout 110 git push ...`.
+- `core.autocrlf=true` on my machine. Any new eval fixture (or other file with hand-counted bytes/lines/chars in a check) needs an entry in `.gitattributes` (`eol=lf`) or its golden values will be wrong by exactly the CRLF count - see the 06-cli-tool bug below.
 
 ## 4. Where things stand (2026-11-06)
 Phases: 1 foundation, 2 core loop, 3 orchestrator, 4 memory and eval gate are BUILT. Phase 4 is under external review and NOT approved. Phases 5 (specialists) and 6 (hardening) are not started.
@@ -37,19 +39,29 @@ Open or unmerged (a stack; merge in this order only after the second external re
 2. PR #7 `claude/phase4-memory-evals`: lessons, reviewer proposals, eval gate, real eval runner, review fixes (guard on the real working directory, `--tools`, streaming init check, content-bound approvals, valid paired eval gate, process-tree kill). Stacked on #6.
 3. `claude/calibration-restricted-tools` (on #7): `TOKENS_PER_CALL` 8k, token cap 200k.
 4. `claude/clean-deliveries` (on #7): workspace `.gitignore`, tester scratch files outside the workspace, word-boundary titles.
-5. `claude/fix-timeout-and-retry` (on clean-deliveries, latest `b3ba75d`): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches. 197 tests pass on Linux.
-Windows full suite: 180 pass, 2 skipped (symlink tests) on the phase 4 branch. Run it again on the latest branch.
+5. `claude/fix-timeout-and-retry` (on clean-deliveries, now at `1573229`, pushed): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches, plus three more fixes from session 2 below. 199 tests pass on Windows (2 skipped, symlink tests - expected).
 
-Live evidence so far: smoke test OK (tools restricted to Bash, no MCP, subscription credential). Tasks T-0001..T-0003, T-0020, T-0021 reached review. Clean task cost: about 27k tokens for 5 calls (about 5.5k per call) with restricted tools, was 86k with default tools. T-0010 needed the retry and timeout fixes.
-NEVER run live yet: a fix loop, a re-plan, delivery into a target repo (new branch `agentsys/<task>`), the Haiku lesson reviewer, lesson injection, the real eval runner and gate, Opus approval, the SDK backend (it has no tool log: it fails closed).
+Live evidence so far: smoke test OK (tools restricted to Bash, no MCP, subscription credential). Tasks T-0001..T-0003, T-0020, T-0021, T-0022 reached review; T-0021 and T-0022 approved and delivered. Clean task cost: about 27k tokens for 5 calls (about 5.5k per call) with restricted tools, was 86k with default tools. T-0010 needed the retry and timeout fixes.
+NEVER run live yet: a fix loop, a re-plan, the Haiku lesson reviewer, lesson injection, the eval gate (the real eval *runner* itself has now run live twice, see below), Opus approval, the SDK backend (it has no tool log: it fails closed).
 
-## 5. Open items for me (ask me for the results)
-- T-0021: approve its merge, check `deliveries\T-0021` has only the 4 real files and no junk.
-- T-0022 with `--target-repo C:\Users\dyana\FDE_Agents-runs\target-test`, a BOM criterion to provoke a real fix loop. Do not let me approve it before you see `pending`, `budget.json` and `tasks\T-0022\reports\`.
-- Decide the CSV rule: a row whose field count differs from the header. Recommended: error to stderr naming the row, exit code 1.
-- Second external review of phase 4: `docs/reviews/phase4-review-prompt.md`. Fix only real findings, add a test per fix, record them in `docs/review-response.md`, regenerate the prompt.
-- After the merges: the real eval baseline (`python evals/run_evals.py real --label baseline --yes`), run on `main`. Cost is now about 8 tasks x 30k tokens (estimate, not measured).
+### Session 2 (2026-11-06): 3 more real bugs found and fixed on `claude/fix-timeout-and-retry`
+All found by actually running things live, all fixed, tested and pushed (commits `de30f3b`, `57f9c3f`, `1573229`):
+1. **`protect_config` was blind when the user's own global git ignore excludes `.claude/settings.local.json`** (a commonly recommended personal setup) - `git status` never saw the file, so the injection guard never removed it. Fixed: `protect_config` now walks the filesystem directly instead of trusting `git status`. This is a real security-relevant gap, not just a test fluke - worth keeping in mind for the second phase-4 review.
+2. **`deliver()` crashed with a raw Windows `NotADirectoryError` instead of a clean `blocked` state** when `target_repo` doesn't exist or isn't a git repo - and would crash on every retry until fixed. Fixed: explicit existence/git-repo check before touching it.
+3. **Eval fixtures were silently CRLF on Windows** (`core.autocrlf=true`), which broke `06-cli-tool`'s exact-byte-count golden value (expected 27, got 29 - exactly 2 extra `\r` bytes for 2 lines). The agent's `wc.py` was correct; the fixture was wrong for this machine. Fixed with `.gitattributes` (`eol=lf` on `evals/tasks/**/fixtures/**`).
+
+### Session 2: delivered a real `--target-repo` end to end
+T-0022 (BOM-handling CSV tool) ran the *whole* pipeline live for the first time: submit -> intake -> plan -> build/test (no fix loop needed - BOM via `utf-8-sig` is a well-known idiom, the agent got it right first try, so the fix-loop path is still unverified live) -> final regression -> merge gate -> approve -> deliver with a real target repo (`C:\Users\dyana\FDE_Agents-runs\target-test`, created this session) -> branch `agentsys/T-0022` created there, `main` untouched. 7 calls, ~44k tokens.
+
+### Session 2: real eval baseline run (on `claude/fix-timeout-and-retry`, NOT `main` - `main` doesn't have the Phase 4 `real` mode yet)
+`python evals/run_evals.py real --label baseline --yes`: 6/8 passed, 148,400 tokens actual (estimate was 720k - far cheaper in practice). Saved at `evals/results/real-baseline-1793966265.json`. The 2 failures: `02-api-endpoint` hit the known evidence-matching strictness (tester batched python one-liners in one bash call, like T-0001 before it - not a new bug); `06-cli-tool` was the CRLF bug above (fixed; not re-run yet to confirm 7 or 8/8 - that costs more usage, your call).
+
+## 5. Open items for me (ask me for the results) - session-1 items are now CLOSED
+All of session 1's open items (T-0021 approved + delivered clean, T-0022 run with `--target-repo` and delivered, the CSV rule decided and recorded in `docs/review-response.md`) are done. Carried forward:
+- Decide whether to re-run the real eval baseline (now that 06-cli-tool is fixed) to get a clean pass rate, or leave the 6/8 result as the recorded baseline and move on. Costs more usage either way.
+- Second external review of phase 4: `docs/reviews/phase4-review-prompt.md`. Fix only real findings, add a test per fix, record them in `docs/review-response.md`, regenerate the prompt. Feed it the 3 session-2 bugs too if the review hasn't started yet.
 - T-0010 lives in an old temporary sandbox clone; it can stay undecided.
+- You are waiting on your own decision to approve Phase 4 before Phase 5 starts (your words: "נחכה לאישור 4").
 
 ## 6. How a phase ends (docs/process.md)
 Tests green (Linux and Windows), docs updated, then `docs/reviews/phase<N>.json` (claims, files, honest weak points, questions) and `python scripts/gen_review_prompt.py <N>`, which writes a review-only prompt with direct repository links. I give it to an independent reviewer who must not change files. You make all changes.
