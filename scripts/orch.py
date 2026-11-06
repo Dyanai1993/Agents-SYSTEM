@@ -7,7 +7,7 @@
   python scripts/orch.py pending | approve ID [--note N] | reject ID [--note N]
   python scripts/orch.py pause|stop|resume TASK_ID
   python scripts/orch.py lessons | review-lessons [--force] | proposals
-  python scripts/orch.py apply-proposal P-1 | gate-proposal P-1 --before A.json --after B.json
+  python scripts/orch.py apply-proposal P-1 | recover-proposal P-1 | gate-proposal P-1 --before A.json --after B.json
 """
 import argparse, json, sys
 from pathlib import Path
@@ -28,6 +28,7 @@ for n in ("pause", "stop", "resume"):
 sub.add_parser("lessons"); sub.add_parser("proposals")
 x = sub.add_parser("review-lessons"); x.add_argument("--force", action="store_true"); x.add_argument("--backend", default="cli", choices=["cli", "sdk"])
 x = sub.add_parser("apply-proposal"); x.add_argument("id")
+x = sub.add_parser("recover-proposal"); x.add_argument("id")
 x = sub.add_parser("gate-proposal"); x.add_argument("id"); x.add_argument("--before", required=True); x.add_argument("--after", required=True)
 a = ap.parse_args()
 
@@ -66,6 +67,8 @@ elif a.cmd == "review-lessons":
     print(json.dumps(learning.review(runner.get_backend(a.backend), force=a.force), indent=2))
 elif a.cmd == "apply-proposal":
     print(json.dumps(learning.apply(a.id), indent=2))
+elif a.cmd == "recover-proposal":
+    print(json.dumps(learning.recover(a.id), indent=2))
 elif a.cmd == "gate-proposal":
     print(json.dumps(learning.gate(a.id, a.before, a.after), indent=2))
 else:

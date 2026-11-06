@@ -26,7 +26,7 @@ ROLES = {
 }
 
 # Per-task caps for Max 5x (assumption).
-TASK_CAPS = {"call_cap": 30, "fix_cap": 3, "replan_cap": 2, "timeout_s": 45 * 60}
+TASK_CAPS = {"call_cap": 30, "fix_cap": 3, "replan_cap": 2, "timeout_s": 45 * 60, "token_cap": 450_000}   # token cap ~5x a clean task (86k)
 
 # Usage weights per token by model (assumption).
 MODEL_WEIGHT = {"haiku": 0.3, "sonnet": 1.0, "opus": 5.0}
@@ -52,6 +52,7 @@ TOKENS_PER_CALL = 21_000
 FIX_MARGIN = 1.25            # reserve for fix loops when estimating a task before it starts
 
 # Phase 4: lessons
-LESSON_MAX_LINES = 60        # lessons.md stays short
+LESSON_MAX_LINES = 60        # lessons.md stays short: this is the TOTAL number of lines in the file, header included
+REVIEW_MAX_LESSONS = 40      # the reviewer sees at most this many distinct lessons (bounded input)
 LESSON_RETRIEVE_K = 5        # lessons injected into one agent call
 REVIEW_MIN_LESSONS = 5       # the review step runs only when this many lessons wait (or --force)

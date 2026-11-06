@@ -24,3 +24,27 @@ Everything above runs against the fake backend and a fake `claude` binary only. 
 ## Live run T-0010 (orchestrator, intake from plain text)
 The tester wrote "all constraints verified" in `summary` but no check carried the constraint ids, so the report was rejected and the task stopped with `needs_input`. The user could not answer anything: it was a tester omission.
 Fix: coverage gaps without skipped checks trigger exactly ONE completion call to the tester (with the gap list). Still incomplete -> `needs_input` naming the gap. Skipped checks (tool or environment problems) are never retried. The tester prompt now shows a constraint check in its example and says that only `checks` and `constraints_na` count.
+
+
+## External review of phase 4 (verdict: do not ship)
+Report: `phase4-code-review-he.md` on commit 54f7224. Every finding was checked against the code. All 12 were real; none was refused.
+Tests for each fix: `tests/test_review_fixes.py` and `tests/test_phase4.py`.
+
+| # | Finding | Result | Fix |
+|---|---|---|---|
+| 1 | blocker: guard reads settings of the wrong folder; credential source checked after the run | **Fixed** | Guard also reads `.claude/settings*.json` of the agent's real working directory. The CLI backend streams the output and kills the process the moment `init` shows a wrong `apiKeySource`. Agents cannot leave `.claude/` or `CLAUDE.md` in the workspace (removed, alert logged, never committed). **Not live-verified** |
+| 2 | `tools: []` still gets default tools; `--allowedTools` does not limit availability | **Fixed** | `--tools <list>` (empty string = none) plus `--strict-mcp-config` on every call. `live_smoke.py` now fails if `init` shows other tools or MCP servers. **Re-run the smoke test** |
+| 3 | The system dirties its own repo, then `apply()` refuses | **Fixed** | `memory/inbox`, `memory/proposals`, `lessons.md` are git-ignored. A test runs the default layout (home = repo) end to end |
+| 4 | Gate accepts empty, duplicate, unpaired runs | **Fixed** | Gate needs two different, finished, full-suite runs with unique ids, tied to the base commit and to the branch head, clean tree, no budget skips. Invalid input is not a verdict: the proposal stays open. Token limit is no longer rounded |
+| 5 | Unchecked git failures reported as success | **Fixed** | Every git call that matters is checked. Failed delete -> `revert_failed` and an error; failed cleanup -> `cleanup_failed`. `recover-proposal` repairs |
+| 6 | Constant `_learning` task id: its 45-minute budget never resets | **Fixed** | Each review has its own task id and ledger |
+| 7 | Approval not bound to content | **Fixed** | The approval request stores a hash of the proposal AND the target file content. `apply()` refuses when either changed |
+| 8 | Symlink target escapes the repo | **Fixed** | Targets with a symlink anywhere in the path, or resolving outside the repo, are refused at review and at apply |
+| 9 | Limits not hard: eval budget between tasks only, `0` disables, reviewer input unbounded | **Fixed** | Per-task token cap in the ledger (default 450k); eval budget is a cap inside each task; budget must be positive; reviewer sees at most 40 lessons |
+| 10 | Reusing a label resumes an old run | **Fixed** | Every run folder is unique (`label-timestamp`); resuming needs `--resume DIR`. Results are saved after every task and carry run id and commit |
+| 11 | Interrupt leaves a half-applied branch | **Fixed** | Journal first; `BaseException` triggers cleanup; start ref is a commit when HEAD is detached; `orch.py recover-proposal` |
+| 12 | Word filter does not protect meaning; lessons carry model text | **Partly fixed** | Lessons are fixed templates only; model text is only hashed. Proposals may change only the `Rules` section of a prompt, may not remove never/do-not/only rules, and may not add weakening wording. A human still approves the exact diff. A filter cannot judge meaning: that stays a human job |
+| - | Claims: "60 lines" was 62 | **Fixed** | The cap is the total line count of the file |
+| - | Missing tests (empty eval, label reuse, dup ids, zero budget, interrupt, symlink, hash, checker timeout, hard-coded integration client, crash-safe lessons file) | **Added** | A hanging check now fails its task only. Eval 05 now requires real calls and rejects a hard-coded client |
+
+Still open: proposal quality from a real model, one noisy before/after run as a gate (the review's repeat-run suggestion is not built), the Windows suite, and live verification of the new CLI flags and streaming.

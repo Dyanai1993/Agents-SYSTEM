@@ -212,7 +212,7 @@ def learning_view():
             results.append({"file": f.name, "label": r.get("label"), "ts": r.get("ts"), "passed": sum(x["passed"] for x in rows),
                             "total": len(rows), "tokens": sum(x["tokens"] for x in rows), "fix_loops": sum(x.get("fix_loops", 0) for x in rows), "rows": rows})
     comparison = None
-    if len(results) >= 2:
+    if len(results) >= 2 and sorted(x["id"] for x in results[-2]["rows"]) == sorted(x["id"] for x in results[-1]["rows"]) and results[-2]["label"] != results[-1]["label"]:
         from . import learning
         a, b = _json(files[-2]), _json(files[-1])
         comparison = dict(learning.compare_results(a, b), before=results[-2]["label"], after=results[-1]["label"])

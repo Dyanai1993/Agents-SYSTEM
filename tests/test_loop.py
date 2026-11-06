@@ -413,6 +413,20 @@ if __name__ == "__main__":
 
 
 class SmokeTests(TmpHome):
+    def test_smoke_flags_extra_tools_and_mcp_servers(self):
+        from agentsys import smoke
+        class B(runner.FakeBackend):
+            def run(self, **kw):
+                res = super().run(**kw); res.init = {"apiKeySource": "none", "tools": ["Bash", "Write", "WebFetch"], "mcp_servers": [{"name": "x"}]}; return res
+        orig = runner.billing_guard.run_guard
+        runner.billing_guard.run_guard = lambda **kw: []
+        try:
+            ok, lines = smoke.smoke(B({"smoke": {"ok": True}}, tool_logs={"smoke": [{"tool": "Bash", "command": "echo agentsys-smoke", "output": "agentsys-smoke", "is_error": False}]}))
+        finally:
+            runner.billing_guard.run_guard = orig
+        self.assertFalse(ok)
+        self.assertTrue([l for l in lines if l.startswith("FAIL") and "allowed tools" in l]); self.assertTrue([l for l in lines if l.startswith("FAIL") and "MCP" in l])
+
     def test_smoke_logic_with_fake_backend(self):
         from agentsys import smoke
         fb = runner.FakeBackend({"smoke": {"ok": True}}, tool_logs={"smoke": [{"tool": "Bash", "command": "echo agentsys-smoke", "output": "agentsys-smoke", "is_error": False}]})

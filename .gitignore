@@ -10,3 +10,8 @@ approvals/
 deliveries/
 queue/
 evals/runs/
+memory/inbox/*
+!memory/inbox/.gitkeep
+memory/proposals/
+memory/lessons.md
+memory/lessons.md.tmp

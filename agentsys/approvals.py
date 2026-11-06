@@ -87,6 +87,12 @@ def decide(approval_id, decision, note=""):
     return doc
 
 
+def get_request(approval_id):
+    if not ID_RE.match(approval_id or ""):
+        return None
+    return _read(_dir("pending") / f"{approval_id}.json")
+
+
 def pending():
     return [d for p in sorted(_dir("pending").glob("*.json")) if (d := _read(p)) and status(d["id"]) == "pending"]
 

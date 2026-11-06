@@ -24,21 +24,23 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 
 ## What this phase claims to deliver
 - Lessons are built from facts (budget, reports, events) with fixed templates. Model-written text enters a lesson only as a sanitized 60-character detail
-- lessons.md is capped at 60 lines, deduplicated by key, and at most 5 lessons are injected per agent call, only for the matching role or 'all'
 - The reviewer runs on Haiku, only with 5+ lessons (or --force), and its proposals are filtered by code: allowed targets only, old_text exactly once, protected wording kept, source lessons must exist
 - No proposal is applied without a human approval file; apply works on a NEW branch, runs unit tests and eval selfcheck first, and never touches main or pushes
 - A proposal that fails free checks is reverted and its branch deleted
 - The eval gate reverts the branch on any regression, any missing task, or more than 25% token growth; otherwise it keeps the branch for a human PR
 - evals/run_evals.py real needs --yes, runs sequentially, stops at a token budget, and records pass, fix loops, calls, tokens and seconds per task
 - The dashboard Learning view shows lessons, proposals with state, real eval runs and a before/after comparison with regressions
+- lessons.md has at most 60 lines in total (header included); at most 5 lessons are injected per agent call, only for the matching role or 'all'
+- Every review finding of the first external review was fixed or explicitly marked partly fixed in docs/review-response.md, each with a test
+- The gate refuses invalid, partial, unpaired or unfinished eval runs and gives no verdict for them
 
 ## Files to read (start here)
-- [agentsys/memory.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/memory.py)  (145 lines)
-- [agentsys/learning.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/learning.py)  (200 lines)
-- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/loop.py)  (330 lines)
+- [agentsys/memory.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/memory.py)  (144 lines)
+- [agentsys/learning.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/learning.py)  (331 lines)
+- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/loop.py)  (354 lines)
 - [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/orchestrator.py)  (188 lines)
 - [agentsys/dashboard_data.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/dashboard_data.py)  (222 lines)
-- [evals/run_evals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/evals/run_evals.py)  (145 lines)
+- [evals/run_evals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/evals/run_evals.py)  (174 lines)
 - [.claude/agents/reviewer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/.claude/agents/reviewer.md)  (38 lines)
 - [.claude/agents/tester.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/.claude/agents/tester.md)  (43 lines)
 - [.claude/agents/developer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/.claude/agents/developer.md)  (45 lines)
@@ -46,21 +48,23 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 - [schemas/lesson.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/schemas/lesson.schema.json)  (70 lines)
 - [schemas/proposals.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/schemas/proposals.schema.json)  (66 lines)
 - [dashboard/index.html](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/dashboard/index.html)  (175 lines)
-- [scripts/orch.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/scripts/orch.py)  (72 lines)
+- [scripts/orch.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/scripts/orch.py)  (75 lines)
 - [scripts/gen_review_prompt.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/scripts/gen_review_prompt.py)  (90 lines)
-- [tests/test_phase4.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/tests/test_phase4.py)  (310 lines)
+- [tests/test_phase4.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/tests/test_phase4.py)  (506 lines)
 
 ## Weak points the builder already suspects (confirm, refute, or rank them)
-- The reviewer prompt, lesson injection and the real eval runner were NEVER run against a real model. Proposal quality from Haiku is unknown
-- LLM runs are noisy. The gate compares ONE before run with ONE after run, so a regression can be luck and an improvement can be luck. The 25% token threshold is arbitrary
+- NEW since the first review and NOT run against a real model: the CLI backend now streams and kills the process at init, and passes --tools and --strict-mcp-config. Verify with scripts/live_smoke.py
+- The reviewer prompt, lesson injection and the real eval runner were never run against a real model. Proposal quality from Haiku is unknown
+- LLM runs are noisy. The gate compares ONE before run with ONE after run (now validated and paired, but still single runs). A repeat-run or paired-statistic design is not built
 - apply() runs only free checks (unit tests, selfcheck). They prove nothing broke; they do not measure whether the new rule helps
-- Lessons are an injection path into future prompts. Mitigations: templates, a sanitized 60-character detail, a schema pattern forbidding newlines/backticks/braces, and DATA framing in the prompts. Is that enough?
-- The PROTECTED-wording check is a crude substring test; a proposal could weaken a rule without containing those words
+- Proposals are filtered by code (targets, Rules section only, no weakening words, no removed never/only rules) and bound to a content hash, but no filter judges meaning: the human approval of the exact diff is the real control
+- Lessons are fixed templates; model text is hashed only. The injected lesson text is therefore generic: check that this is still useful
 - Eval runs use an isolated home, so they measure prompt changes but never lesson injection
 - A real eval run costs about 8 x 90k tokens (estimate from 3 live tasks). Its share of a Max 5x window is unknown
 - Lessons are extracted only by orchestrator.process(); tasks run with scripts/run_task.py record nothing
 - Proposal approvals use pseudo task ids ('lesson-P-1'); the Approvals tab shows them without a task title
-- This branch is stacked on the open PR #6 (tester coverage retry)
+- The Windows suite was not run on the review-fix commits (new tests start subprocesses and kill them)
+- This branch is stacked on the open PR #6
 
 ## How to verify without spending quota
 - `python -m unittest discover -s tests -t . -v`
@@ -76,12 +80,12 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 5. Test quality: tests that pass for the wrong reason, missing failure cases, tests that mirror the implementation.
 6. Maintainability and honesty of docs: do README and docs say what the code does? Anything claimed but not built?
 7. Specific questions for this phase:
-- Can a lesson or a proposal carry an instruction into a future prompt that the schema, sanitizer and DATA framing do not stop?
-- Can a proposal change a file outside the allowed targets, via path tricks, symlinks, or an old_text that spans files?
-- Can apply() leave the repo on the wrong branch, dirty, or with a half-applied change after a crash? Check every exit path
-- Is a single before/after eval run a defensible gate? What is the cheapest change that makes it more trustworthy (repeat runs, per-task thresholds, paired comparison)?
-- Does anything in the eval runner or learning code spend quota without --yes, loop on calls, or bypass the billing guard and the budget caps?
-- Which metric would show that the improvement loop actually improves anything, and is it recorded?
+- Re-check each fix in docs/review-response.md against the code: is it really closed, or only moved?
+- Can anything still reach a billing path or a wrong credential source: workspace settings, env in settings files, other config directories, the streamed init check (what if init never arrives)?
+- Is the streaming CliBackend safe: deadlocks, zombie processes, partial JSON lines, the timeout timer, stderr handling, Windows .cmd wrappers?
+- Are the new proposal restrictions (Rules section only, marker counts, forbidden words) bypassable with realistic text, and are they too strict to be useful?
+- Is the gate now sound enough for ONE decision, or must it be repeated? Propose the cheapest change.
+- What else would you test that the new tests miss?
 
 ## Output format (use exactly this)
 1. **Verdict**: one of `ship`, `ship after fixes`, `do not ship`, with one sentence.

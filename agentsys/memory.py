@@ -4,8 +4,8 @@ memory/inbox/<id>.json   one lesson per file (schema lesson), written after each
 memory/lessons.md        consolidated, deduplicated, at most LESSON_MAX_LINES lines
 retrieve()               picks at most K relevant lines for one agent call (keyword overlap, no LLM)
 
-Lesson text is built from TEMPLATES plus a sanitized short detail. Model-written text is never copied into prompts
-unfiltered: lessons are an injection path into future prompts, so they are treated as hints, not instructions.
+Lesson text is a fixed TEMPLATE and nothing else. Model-written text (check names, error messages) never enters a lesson:
+it is only hashed into the dedup key. Lessons are an injection path into future prompts, so they carry no free text.
 """
 import hashlib
 import json
@@ -38,10 +38,7 @@ def _dirs():
 
 def _lesson(task_id, kind, detail, evidence_ref=None):
     role, text = TEMPLATES[kind]
-    detail = sanitize(detail)
-    key = f"{kind}:{detail.lower()}" if detail else kind
-    if detail:
-        text = f"{text} ({detail})"
+    key = f"{kind}:{hashlib.sha256(sanitize(detail, 200).lower().encode()).hexdigest()[:6]}" if detail else kind
     return {"id": f"{task_id}-{hashlib.sha256(key.encode()).hexdigest()[:8]}", "task_id": task_id, "ts": logger.now(),
             "kind": kind, "role": role, "key": key, "text": text[:200], "evidence_ref": evidence_ref}
 
@@ -113,11 +110,13 @@ def consolidate():
     for les in inbox_lessons():
         g = groups.setdefault(les["key"], {"lesson": les, "tasks": set()})
         g["tasks"].add(les["task_id"])
-    rows = sorted(groups.values(), key=lambda g: (-len(g["tasks"]), g["lesson"]["key"]))[: config.LESSON_MAX_LINES]
+    header = ["# Lessons (generated, deduplicated; do not edit by hand)", ""]
+    rows = sorted(groups.values(), key=lambda g: (-len(g["tasks"]), g["lesson"]["key"]))[: config.LESSON_MAX_LINES - len(header)]
     base, _ = _dirs()
-    lines = ["# Lessons (generated, deduplicated; do not edit by hand)", ""]
-    lines += [f"- [{g['lesson']['role']}] {g['lesson']['text']} (seen in {len(g['tasks'])} task(s))" for g in rows]
-    (base / "lessons.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    lines = header + [f"- [{g['lesson']['role']}] {g['lesson']['text']} (seen in {len(g['tasks'])} task(s))" for g in rows]
+    tmp = base / "lessons.md.tmp"                       # atomic: a crash never leaves a half-written file
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(base / "lessons.md")
     return len(rows)
 
 

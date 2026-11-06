@@ -57,10 +57,12 @@ python scripts/orch.py review-lessons [--force]   # Haiku proposes small prompt 
 python scripts/orch.py proposals                  # then approve each one in the dashboard (Approvals tab)
 python scripts/orch.py apply-proposal P-1         # new branch agentsys/lesson-P-1 + free checks
 python evals/run_evals.py real --label baseline --yes        # REAL quota: about 8 x 90k tokens (estimate)
+git checkout agentsys/lesson-P-1                             # the AFTER run must be on the proposal branch (clean tree)
 python evals/run_evals.py real --label after-P-1 --yes       # run on the proposal branch
+git checkout main
 python scripts/orch.py gate-proposal P-1 --before evals/results/real-baseline-*.json --after evals/results/real-after-P-1-*.json
 ```
-A regression, a missing task or more than 25% token growth deletes the branch. Otherwise the branch stays and you open the PR.
+The BEFORE run must be on the base commit, both runs must be complete and cover the full suite. Invalid input gives no verdict. A regression or more than 25% token growth deletes the branch. Otherwise the branch stays and you open the PR. `recover-proposal` repairs an interrupted apply.
 Nothing is merged or pushed by the system.
 
 ## Definition of done per phase

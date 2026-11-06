@@ -118,49 +118,80 @@ class CliBackend:
         exe = shutil.which(self.binary, path=(env or os.environ).get("PATH"))
         if not exe:
             return AgentResult(role=role, ok=False, backend=self.name, error=f"'{self.binary}' not found on PATH")
+        tool_list = ",".join(tools or [])
         cmd = [exe, "-p", "--output-format", "stream-json", "--verbose", "--model", model,
-               "--max-turns", str(limits.max_turns)]
+               "--max-turns", str(limits.max_turns),
+               "--tools", tool_list,                     # AVAILABLE tools (empty string = none). --allowedTools alone only skips prompts
+               "--strict-mcp-config"]                    # no MCP servers unless explicitly configured
+        if tool_list:
+            cmd += ["--allowedTools", tool_list]
         if system_prompt:
             cmd += ["--append-system-prompt", system_prompt]
-        if tools:
-            cmd += ["--allowedTools", ",".join(tools)]
         t0 = time.time()
-        try:
-            p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=cwd, env=env,
-                               timeout=limits.timeout_s)
-        except subprocess.TimeoutExpired:
-            return AgentResult(role=role, ok=False, backend=self.name, error=f"timeout after {limits.timeout_s}s",
-                               duration_s=time.time() - t0)
+        import tempfile
+        import threading
+        err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True, cwd=cwd, env=env)
+        timed_out = threading.Event()
+
+        def kill_on_timeout():
+            timed_out.set()
+            p.kill()
+        timer = threading.Timer(limits.timeout_s, kill_on_timeout)
+        timer.start()
+
+        def feed():
+            try:
+                p.stdin.write(prompt)
+                p.stdin.close()
+            except (OSError, ValueError):
+                pass
+        threading.Thread(target=feed, daemon=True).start()
         init, result = None, None
         calls, outputs = {}, {}
-        for line in p.stdout.splitlines():
-            try:
-                msg = json.loads(line)
-            except ValueError:
-                continue
-            if msg.get("type") == "system" and msg.get("subtype") == "init":
-                init = msg
-            elif msg.get("type") == "result":
-                result = msg
-            elif msg.get("type") in ("assistant", "user"):
-                content = (msg.get("message") or {}).get("content")
-                for blk in content if isinstance(content, list) else []:
-                    if not isinstance(blk, dict):
-                        continue
-                    if blk.get("type") == "tool_use":
-                        calls[blk.get("id")] = {"tool": blk.get("name"), "command": (blk.get("input") or {}).get("command", "")}
-                    elif blk.get("type") == "tool_result":
-                        out = blk.get("content")
-                        if isinstance(out, list):
-                            out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
-                        outputs[blk.get("tool_use_id")] = (str(out or "")[:4000], bool(blk.get("is_error")))
+        try:
+            for line in p.stdout:                       # streamed: the credential source is checked the moment init arrives
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if msg.get("type") == "system" and msg.get("subtype") == "init":
+                    init = msg
+                    problems = billing_guard.check_init_message(msg)
+                    if problems:
+                        p.kill()                        # stop before the agent does any work
+                        raise billing_guard.BillingGuardError(problems)
+                elif msg.get("type") == "result":
+                    result = msg
+                elif msg.get("type") in ("assistant", "user"):
+                    content = (msg.get("message") or {}).get("content")
+                    for blk in content if isinstance(content, list) else []:
+                        if not isinstance(blk, dict):
+                            continue
+                        if blk.get("type") == "tool_use":
+                            calls[blk.get("id")] = {"tool": blk.get("name"), "command": (blk.get("input") or {}).get("command", "")}
+                        elif blk.get("type") == "tool_result":
+                            out = blk.get("content")
+                            if isinstance(out, list):
+                                out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
+                            outputs[blk.get("tool_use_id")] = (str(out or "")[:4000], bool(blk.get("is_error")))
+            p.wait()
+        finally:
+            timer.cancel()
+            if p.poll() is None:
+                p.kill()
+        err_file.seek(0)
+        stderr = err_file.read()
+        err_file.close()
+        if timed_out.is_set():
+            return AgentResult(role=role, ok=False, backend=self.name, error=f"timeout after {limits.timeout_s}s", duration_s=time.time() - t0)
         tool_log = [dict(c, output=outputs.get(i, ("", False))[0], is_error=outputs.get(i, ("", False))[1]) for i, c in calls.items()]
-        blob = (p.stderr or "") + " " + json.dumps(result or {})
+        blob = (stderr or "") + " " + json.dumps(result or {})
         if (result is None or result.get("is_error")) and looks_like_limit(blob):
             raise UsageLimitReached(blob[:300])
         if result is None or result.get("is_error"):
             return AgentResult(role=role, ok=False, backend=self.name, init=init, duration_s=time.time() - t0,
-                               error=(p.stderr or str(result))[:300])
+                               error=(stderr or str(result))[:300])
         u = result.get("usage") or {}
         return AgentResult(role=role, ok=True, text=result.get("result", ""), backend=self.name, init=init, tool_log=tool_log,
                            api_key_source=(init or {}).get("apiKeySource"), duration_s=time.time() - t0,
@@ -237,6 +268,8 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
         except FileNotFoundError:
             system_prompt = None
 
+    if settings_paths is None:        # check the settings the agent process will really read: ours AND its working directory's
+        settings_paths = billing_guard.default_settings_paths(os.getcwd()) + (billing_guard.default_settings_paths(cwd)[1:] if cwd else [])
     billing_guard.run_guard(env=env, settings_paths=settings_paths)   # every call, not only at startup
     if model == "opus":
         approvals.require_opus(task_id)                               # Opus only with a human decision file

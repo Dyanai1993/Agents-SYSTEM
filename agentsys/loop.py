@@ -87,6 +87,28 @@ def protect_qa(ws, task_id):
     return bad
 
 
+def protect_config(ws, task_id, who):
+    """No agent may create or change .claude/ or CLAUDE.md in the workspace: Claude Code would read them as settings."""
+    bad = [f for f in _changed(ws) if f.replace("\\", "/").startswith(".claude/") or f.replace("\\", "/") == ".claude" or f.lower().endswith("claude.md")]
+    if bad:
+        for f in bad:
+            path = ws / f
+            tracked = _git(ws, "ls-files", "--error-unmatch", f).returncode == 0
+            if tracked:
+                _git(ws, "checkout", "--", f)
+            elif path.is_dir():
+                import shutil
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        cfg = ws / ".claude"
+        if cfg.is_dir() and not any(cfg.rglob("*")):
+            import shutil
+            shutil.rmtree(cfg, ignore_errors=True)               # no empty settings folder is left behind
+        logger.log_event(task_id, "orchestrator", "alert", f"{who} wrote Claude settings in the workspace: removed", status="blocked", payload={"files": bad})
+    return bad
+
+
 def commit_changes(ws, message, only=None):
     files = [f for f in _changed(ws) if only is None or only(f)]
     if files:
@@ -241,6 +263,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
                         "Your previous report was incomplete. Run the missing checks now and report them in `checks`, with the ids in "
                         "`criterion_ids`. Mark a constraint not applicable only in `constraints_na` with a reason. "
                         "Statements in `summary` do not count."}), post_process=post)
+        protect_config(ws, task_id, "tester")
         mutated = [f for f in _changed(ws) if not _is_qa(f)]
         if mutated:                                  # tester must not edit product code
             _git(ws, "checkout", "--", ".", f":(exclude){QA_DIR}")
@@ -278,6 +301,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
                 reason = out["blocking_reason"] + (" Questions: " + " | ".join(out.get("questions", [])) if out.get("questions") else "")
                 raise (NeedsInput if out["blocking_kind"] == "user_input" else EnvBlocked)(f"developer blocked on {wi['id']}: {reason}")
             protect_qa(ws, task_id)
+            protect_config(ws, task_id, "developer")
             files = commit_changes(ws, f"{wi['id']}: {wi['title']}")
             claimed = set(out["files_changed"])
             if claimed and not claimed <= set(files) | set(_changed(ws)):
