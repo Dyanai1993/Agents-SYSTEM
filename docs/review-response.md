@@ -74,6 +74,13 @@ Tests: `tests/test_fix_timeout_retry.py` (includes the story end to end: stop fo
 Product note from the same run (not a system bug): a CSV row with fewer or more fields than the header gives `null` values or a `null` key.
 The requirement did not say what to do, and a real intake should ask. Decide it in the next requirement.
 
+**Decided (2026-11-06)**: a CSV row whose field count differs from the header is an error, not a best-effort fill. The tool prints
+`error: row <N>: expected <H> fields, got <F>` to stderr naming the row, and exits 1 without producing output for that row.
+A silent `null` key (extra fields) or `null` value (missing fields) corrupts downstream JSON silently; failing loud with the row
+number is cheaper to fix than discovering it later. This is a policy for future CSV-conversion requirements' acceptance criteria,
+written here for intake/architect to reuse — it does not retroactively change already-approved deliveries (T-0021's `csv2json.py`
+still uses `csv.DictReader`'s default fill behavior).
+
 ## T-0010 merge request still held build junk
 T-0010 was built before the workspace `.gitignore` existed, so its commits already contained `__pycache__/*.pyc`; the new ignore file cannot remove what is committed.
 Fix at the delivery step: the merge request's file list and the patch files exclude build junk (`__pycache__`, `*.pyc`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `node_modules`, `.venv`, `.DS_Store`) whatever the workspace history says.
