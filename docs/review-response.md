@@ -61,3 +61,15 @@ Reading the real approval request showed what no test had: the delivery containe
 (`qa_tests/err.txt`, `out.txt`, `o.txt`, ...), and the title was cut inside a word ("chara").
 Fixed: every workspace starts with a `.gitignore` for build junk (a seed may bring its own); the tester prompt says that real test scripts go
 in `qa_tests/` and all scratch output goes OUTSIDE the workspace; titles are cut at a word boundary. Tests: `CleanDeliveryTests`.
+
+## Live run T-0010: the timeout clock and a missing retry command (found by the local tester session)
+1. `timeout_s` (45 minutes) was measured from the first start of the task, so every hour a task waited for a human or sat paused counted against it.
+   The rerun of T-0010 died with `task timeout 2700s reached` before it could do any work. Fixed: the clock restarts with every run
+   (`Ledger.begin_run()`, called by `loop.run_task`); active agent time is recorded separately (`active_s`). Pause/stop never counted against the clock after this.
+2. A task in `needs_input`, `needs_approval`, `blocked` or `paused` could only be restarted by calling `orchestrator.process()` from code.
+   Added `orch.py retry TASK [--answer "..."]`: re-queues the task; it resumes from its checkpoint. An answer is stored as a constraint
+   ("Clarification from the user: ...") and blocking unknowns are marked answered. Done, rejected, stopped and waiting-for-approval tasks are refused.
+3. `timeline.py` counted tokens twice: already fixed earlier (tokens are logged once per call).
+Tests: `tests/test_fix_timeout_retry.py` (includes the story end to end: stop for a question, wait 10 hours, answer, resume).
+Product note from the same run (not a system bug): a CSV row with fewer or more fields than the header gives `null` values or a `null` key.
+The requirement did not say what to do, and a real intake should ask. Decide it in the next requirement.

@@ -6,6 +6,7 @@
   python scripts/orch.py status
   python scripts/orch.py pending | approve ID [--note N] | reject ID [--note N]
   python scripts/orch.py pause|stop|resume TASK_ID
+  python scripts/orch.py retry TASK_ID [--answer "reply to the question"]   re-queue a needs_input/blocked/paused task (resumes from its checkpoint)
   python scripts/orch.py lessons | review-lessons [--force] | proposals
   python scripts/orch.py apply-proposal P-1 | recover-proposal P-1 | gate-proposal P-1 --before A.json --after B.json
 """
@@ -26,6 +27,7 @@ for n in ("approve", "reject"):
 for n in ("pause", "stop", "resume"):
     x = sub.add_parser(n); x.add_argument("task_id")
 sub.add_parser("lessons"); sub.add_parser("proposals")
+x = sub.add_parser("retry"); x.add_argument("task_id"); x.add_argument("--answer")
 x = sub.add_parser("review-lessons"); x.add_argument("--force", action="store_true"); x.add_argument("--backend", default="cli", choices=["cli", "sdk"])
 x = sub.add_parser("apply-proposal"); x.add_argument("id")
 x = sub.add_parser("recover-proposal"); x.add_argument("id")
@@ -53,6 +55,9 @@ elif a.cmd == "pending":
         print(f"{x['id']}  [{x['gate']}]\n{x['context']}\n")
 elif a.cmd in ("approve", "reject"):
     print(approvals.decide(a.id, "approved" if a.cmd == "approve" else "rejected", a.note))
+elif a.cmd == "retry":
+    e = orchestrator.retry(a.task_id, a.answer)
+    print("queued again:", e["task_id"], "-", e["note"])
 elif a.cmd == "lessons":
     print((memory.config.home() / "memory" / "lessons.md").read_text() if (memory.config.home() / "memory" / "lessons.md").exists() else "no lessons yet")
 elif a.cmd == "proposals":

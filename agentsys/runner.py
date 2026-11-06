@@ -327,7 +327,7 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
         log("alert", "billing guard: " + problems[0], status="blocked", payload={"problems": problems})
         raise billing_guard.BillingGuardError(problems)
 
-    ledger.record_call(role, model, tokens)
+    ledger.record_call(role, model, tokens, res.duration_s)
     if not res.ok:
         res.error = res.error or "agent failed"
         log("error", f"{role} failed: {res.error}", status="error", tokens_estimate=tokens, payload={"error": res.error})

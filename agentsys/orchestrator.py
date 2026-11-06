@@ -80,6 +80,39 @@ def submit(task_id, *, request_text=None, requirements=None, title=None, target_
     return entry
 
 
+RETRYABLE = {"needs_input", "needs_approval", "blocked", "paused", "queued"}
+
+
+def retry(task_id, answer=None):
+    """Put a stopped task back in the queue. It resumes from its checkpoint (progress.json), not from the start.
+
+    `answer` is the human's reply to a question: it is added as a constraint ("Clarification: ...") and any blocking
+    unknown in the requirement is marked answered. A task waiting for an approval is decided, not retried.
+    """
+    entry = load_entry(task_id)
+    if entry is None:
+        raise KeyError(task_id)
+    if entry["status"] not in RETRYABLE:
+        raise ValueError(f"task is '{entry['status']}': retry applies to {sorted(RETRYABLE)}"
+                         + (" (decide the pending approval instead)" if entry["status"] == "waiting_approval" else ""))
+    if answer:
+        answer = " ".join(answer.split())[:300]
+        req = entry["requirements"]
+        if req is None:
+            p = config.home() / "tasks" / task_id / "requirements.json"
+            req = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        if req is None:
+            raise ValueError("this task has no structured requirement yet: submit it again with the answer in the request")
+        req = dict(req, constraints=list(req["constraints"]) + [f"Clarification from the user: {answer}"],
+                   unknowns=[dict(u, blocking=False) for u in req["unknowns"]])
+        schema.validate("requirements", req)
+        entry["requirements"] = req
+    entry.update(status="queued", note="retry requested" + (" with an answer" if answer else ""), resume_after=None)
+    save_entry(entry)
+    logger.log_event(task_id, "human", "decision", "retry requested" + (" with an answer" if answer else ""), status="ok")
+    return entry
+
+
 def _merge_context(task_id, tdir):
     summary = (tdir / "summary.md").read_text(encoding="utf-8") if (tdir / "summary.md").exists() else ""
     ws = tdir / "workspace"

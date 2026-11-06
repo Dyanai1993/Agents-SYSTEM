@@ -145,6 +145,7 @@ def run_task(task_id, requirements, *, backend, title=None, env=None, settings_p
     tdir.mkdir(parents=True, exist_ok=True)
     schema.validate("requirements", requirements)   # bad input is the caller's bug: raise, do not log a task failure
     title = title or tasks.short_title(requirements["goal"])
+    Ledger(task_id).begin_run()                    # the timeout clock restarts with every run, not with the task
     try:
         _run(task_id, tdir, requirements, backend, title, env, settings_paths, limits, seed)
         status, state, msg = "ready_for_review", "review", "All work items and the final regression passed. Waiting for your review."

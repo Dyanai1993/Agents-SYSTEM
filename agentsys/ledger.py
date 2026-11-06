@@ -30,7 +30,7 @@ class Ledger:
                 "fix_loops": 0, "fix_cap": self.caps["fix_cap"],
                 "replans": 0, "replan_cap": self.caps["replan_cap"],
                 "timeout_s": self.caps["timeout_s"], "token_cap": self.caps.get("token_cap"),
-                "tokens_est": 0, "units": 0.0,
+                "tokens_est": 0, "units": 0.0, "active_s": 0.0, "run_started_epoch": time.time(),
                 "by_model": {}, "by_agent": {}, "limit_hits": [],
             }
             self.save()
@@ -41,19 +41,26 @@ class Ledger:
         tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
         tmp.replace(self.path)  # atomic: a killed run never leaves half a file
 
+    def begin_run(self):
+        """A new run (run_task call) starts its own clock. Time spent waiting for a human, or paused, never counts."""
+        self.data["run_started_epoch"] = time.time()
+        self.save()
+
     def check_can_call(self):
         d = self.data
         if d["calls"] >= d["call_cap"]:
             raise BudgetExceeded(f"call cap {d['call_cap']} reached")
-        if time.time() - d["started_epoch"] > d["timeout_s"]:
-            raise BudgetExceeded(f"task timeout {d['timeout_s']}s reached")
+        elapsed = time.time() - d.get("run_started_epoch", d["started_epoch"])      # old budget files fall back to the start time
+        if elapsed > d["timeout_s"]:
+            raise BudgetExceeded(f"run timeout {d['timeout_s']}s reached in this run (time spent waiting for you does not count)")
         cap = d.get("token_cap")
         if cap is not None and d["tokens_est"] >= cap:
             raise BudgetExceeded(f"token cap {cap} reached ({d['tokens_est']} used)")
 
-    def record_call(self, agent, model, tokens):
+    def record_call(self, agent, model, tokens, seconds=0.0):
         d = self.data
         d["calls"] += 1
+        d["active_s"] = round(d.get("active_s", 0.0) + seconds, 1)
         d["tokens_est"] += int(tokens)
         d["units"] += tokens * config.MODEL_WEIGHT.get(model, 1.0)
         d["by_model"][model] = d["by_model"].get(model, 0) + 1
