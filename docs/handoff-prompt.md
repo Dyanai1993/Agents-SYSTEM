@@ -1,7 +1,7 @@
 # Handoff prompt: continue the Agents-SYSTEM project in another session
 
 Paste everything below the line into a new Claude Code session opened in the repository folder.
-Last updated: 2026-11-06 (session 2, continued). Keep this file current: update it at the end of every work session.
+Last updated: 2026-11-06 (session 2, continued - fourth review round fixed). Keep this file current: update it at the end of every work session.
 
 ---
 
@@ -39,7 +39,7 @@ Open or unmerged (a stack; merge in this order only after the second external re
 2. PR #7 `claude/phase4-memory-evals`: lessons, reviewer proposals, eval gate, real eval runner, review fixes (guard on the real working directory, `--tools`, streaming init check, content-bound approvals, valid paired eval gate, process-tree kill). Stacked on #6.
 3. `claude/calibration-restricted-tools` (on #7): `TOKENS_PER_CALL` 8k, token cap 200k.
 4. `claude/clean-deliveries` (on #7): workspace `.gitignore`, tester scratch files outside the workspace, word-boundary titles.
-5. `claude/fix-timeout-and-retry` (on clean-deliveries, now at `830a78e`, pushed): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches, plus everything from session 2 below. 221 tests pass on Windows (2 skipped: symlink tests - expected on this machine; the POSIX orphan-process test now also runs and passes on Windows, see the third review below).
+5. `claude/fix-timeout-and-retry` (on clean-deliveries, now at `5e0280b`, pushed): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches, plus everything from session 2 below. 241 tests pass on Windows (3 skipped: symlink tests - expected on this machine; the POSIX orphan-process test now also runs and passes on Windows, see the third review below).
 
 Live evidence so far: smoke test OK (tools restricted to Bash, no MCP, subscription credential). Tasks T-0001..T-0003, T-0020, T-0021, T-0022 reached review; T-0021 and T-0022 approved and delivered. Clean task cost: about 27k tokens for 5 calls (about 5.5k per call) with restricted tools, was 86k with default tools. T-0010 needed the retry and timeout fixes.
 NEVER run live yet: a fix loop, a re-plan, the Haiku lesson reviewer, lesson injection, the eval gate (the real eval *runner* itself has now run live twice, see below), Opus approval, the SDK backend (it has no tool log: it fails closed).
@@ -76,13 +76,29 @@ Review done at `7cd2ecb` (after confirming the second review's Ledger/diff_ref/R
 221 tests pass (was 209; one existing test had to be adjusted - it planted a qa_tests file via the developer callback, which only survived because of the protect_qa bug this round fixed; now commits it as genuine pre-existing history instead).
 
 ### Session 2: prepped a FOURTH review round, deliberately comprehensive not incremental (commit `830a78e`)
-You pointed out that rounds 1 and 2's underlying mechanisms were never independently re-verified from scratch - each round mostly focused on re-checking the immediately preceding round's diff. Given the track record (12, then 11, then 11 real bugs across three rounds), that's a fair concern. Rewrote `docs/reviews/phase4.json`'s claims/known_weaknesses/questions to explicitly ask the next reviewer to re-verify EVERY claim from all three rounds against the current code, not just the newest ones. **Not yet sent to a reviewer** - the regenerated prompt is ready at the link below.
+You pointed out that rounds 1 and 2's underlying mechanisms were never independently re-verified from scratch - each round mostly focused on re-checking the immediately preceding round's diff. Given the track record (12, then 11, then 11 real bugs across three rounds), that's a fair concern. Rewrote `docs/reviews/phase4.json`'s claims/known_weaknesses/questions to explicitly ask the next reviewer to re-verify EVERY claim from all three rounds against the current code, not just the newest ones.
 
-## 5. Open items for me (ask me for the results) - sessions 1 and the first two rounds of session 2 are now CLOSED
-- Send the regenerated `docs/reviews/phase4-review-prompt.md` (at commit `830a78e` or later - check `git log -1` on this branch for the real current tip before sending) to a reviewer for the comprehensive fourth round, when ready.
+### Session 2: fourth external review of phase 4 - verdict "do not ship" again, all 14 findings real, all fixed (commit `5e0280b`)
+Comprehensive round, re-verifying rounds 1-3 as well as finding new issues. All 14 were checked against the code (each reproduced in a new test) and fixed; none was refused. Full table in `docs/review-response.md` ("Fourth external review of phase 4"). Picking out the most interesting:
+- `orchestrator._Lock` was still a hand-rolled create-a-file-and-check-its-mtime scheme (deciding "stale" from an mtime, then unlinking and recreating) with a genuine race. Replaced with a real OS-level advisory lock, `agentsys/filelock.py` (`msvcrt.locking` on Windows, `fcntl.flock` on POSIX), reused for both `orchestrator._Lock`/`retry()` and `learning.py`'s `apply()`/`gate()`/`recover()` (which had no lock at all before). Verified live on this machine: two threads racing for the same lock, only one wins; a lock auto-releases the instant its holder process is killed.
+- `control.read()` (pause/stop) was checked only inside `loop.py`'s `agent()` wrapper - a task with nothing left for the build loop to do (e.g. sitting at an already-approved merge gate) ran straight through a human's "stop", including delivery itself. Now checked before intake and again right before `deliver()`.
+- `deliver()`'s idempotency journal never tracked the delivered branch's own HEAD in the target repo, so a branch someone modified directly there after delivery was silently treated as still "ours" on the next call. Journal now records `branch_sha` and raises on drift.
+- A symlinked `.claude` (or any workspace subdirectory) was followed transparently by `is_dir()`/`rglob()`/`os.walk()`, letting `protect_config()`'s "cleanup" delete or enumerate files OUTSIDE the workspace. Guarded with `os.path.islink()` before any descent or removal (the new test skips here - symlink creation needs elevated Windows privileges this dev machine doesn't have - same as existing symlink tests).
+- `memory.retrieve()` parsed `lessons.md` directly, bypassing the round-3 fix that re-derives safe text from `TEMPLATES` - a stale or tampered line there would reach an agent prompt forever. Now rejects anything that isn't an exact template match.
+- `billing_guard` ignored `CLAUDE_CONFIG_DIR`, the OFFICIAL Claude Code override for where global settings live, and checked the caller's own env instead of the real child env - a real gap for anyone using that override. Both fixed.
+- The evidence-matching ratio check let a long shared LABEL (`"test_result: "`) dominate the 75% threshold while a short, different trailing VERDICT (`PASS` vs real `FAIL`) was never itself verified. Fixed: the match must now reach the end of the evidence string, so whatever is claimed last has to be exactly right.
+- `runner.py` capped tool output at 4000 characters from the front, silently dropping real evidence at the END of a long run (e.g. unittest's own summary line) - an honest, correct report could be rejected as "fabricated" simply because its proof was too far down. Now keeps head AND tail.
+- CLI backend resource management, still broken on two error paths: a Windows Job handle from an early-exit kill could be closed again by the `finally` block (double `CloseHandle`); a `Popen` failure leaked the stderr tempfile because it happened before the `try`/`finally` that closes it even started. Both fixed, both with a dedicated test (a mocked `Popen` failure confirming the tracked tempfile closes; counting `_kill_tree` calls to confirm the job handle is never targeted twice).
+- `dashboard/server.py` sent no `X-Frame-Options`/`frame-ancestors` - the approval-handling dashboard could be embedded in an attacker's iframe for clickjacking. Both headers added; a new test spins up the real server and checks a live HTTP response.
+241 tests pass (was 221; 3 skipped - 2 new symlink tests plus the pre-existing one, all for the same reason: this dev machine can't create symlinks without elevated privileges).
+
+Still open, as in every prior round: one noisy before/after eval run as the gate's only evidence; the evidence rule's false-rejection risk for an honestly-run command with different quoting/escaping than what gets logged; `SdkBackend`'s actual query path remains unverified against a real login (only `ClaudeAgentOptions` construction was checked).
+
+## 5. Open items for me (ask me for the results) - sessions 1 and the first three rounds of session 2 are now CLOSED
+- Decide whether to request a FIFTH review round, and whether it should be comprehensive again or can now be incremental given four rounds have each found real bugs - this needs your call, not mine to make alone.
 - Decide whether to re-run the real eval baseline again (now that both `02-api-endpoint` prompt bugs are fixed) to get a clean pass rate, or leave the 6/8 result as the recorded baseline. Costs more usage either way; not urgent since both fixes are deterministic, not variance-dependent.
 - T-0010 lives in an old temporary sandbox clone; it can stay undecided.
-- You are still waiting on your own decision to approve Phase 4 before Phase 5 starts. Nothing above should be read as "therefore approve it" - after three rounds each finding ~11 real bugs, I would NOT approve yet without at least one clean comprehensive round. That is still your call, not mine.
+- You are still waiting on your own decision to approve Phase 4 before Phase 5 starts. Nothing above should be read as "therefore approve it" - after four rounds each finding 10-14 real bugs, I would NOT approve yet without at least one clean round. That is still your call, not mine.
 
 ## 6. How a phase ends (docs/process.md)
 Tests green (Linux and Windows), docs updated, then `docs/reviews/phase<N>.json` (claims, files, honest weak points, questions) and `python scripts/gen_review_prompt.py <N>`, which writes a review-only prompt with direct repository links. I give it to an independent reviewer who must not change files. You make all changes.
