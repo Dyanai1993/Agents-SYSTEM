@@ -21,6 +21,8 @@ branch = spec.get("branch") or git("rev-parse", "--abbrev-ref", "HEAD") or "main
 links = [f"- Repository: {REPO_URL}", f"- Branch to review: {REPO_URL}/tree/{branch}"]
 if spec.get("pr"):
     links.append(f"- Pull request (diff and discussion): {REPO_URL}/pull/{spec['pr']}")
+if spec.get("diff"):                      # a scoped round: the exact change to review
+    links.append(f"- THE CHANGE TO REVIEW: {REPO_URL}/compare/{spec['diff']}")
 links.append(f"- Compare with main: {REPO_URL}/compare/main...{branch}")
 for f in spec["files"]:
     pass

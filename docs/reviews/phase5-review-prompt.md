@@ -1,8 +1,9 @@
-# Review request: Phase 5 — Security specialist, plus three small fixes shipped alongside it
+# Review request: Phase 5 — Round 2 (scoped): the fixes for the 9 findings of the first Phase 5 review
 
 ## Where the code is
 - Repository: https://github.com/Dyanai1993/Agents-SYSTEM
 - Branch to review: https://github.com/Dyanai1993/Agents-SYSTEM/tree/claude/fix-timeout-and-retry
+- THE CHANGE TO REVIEW: https://github.com/Dyanai1993/Agents-SYSTEM/compare/cf8cf811...claude/fix-timeout-and-retry
 - Compare with main: https://github.com/Dyanai1993/Agents-SYSTEM/compare/main...claude/fix-timeout-and-retry
 Review the branch above, not main. Files are listed relative to the repository root; each one opens at `https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/<path>`.
 
@@ -12,7 +13,7 @@ model quota or touches the network, and never use an API key. The builder (Claud
 If you cannot verify something, say "not verified" and why. Do not guess.
 
 ## System in one paragraph
-A personal multi-agent engineering system on Claude Code with a Max subscription login. A Python state machine runs one agent at a time (Architect, Developer, Tester) with schemas plus code rules, fix loops, re-plans, checkpoints, approval gates and a local dashboard. Phase 4 (shared memory, lessons, a controlled improvement loop, a real eval runner and gate) went through FOUR external review rounds; the user explicitly decided to close it there rather than request a fifth, and this review is NOT a re-review of Phase 4's own code. Phase 5 adds one new agent role, Security, plus three small fixes made while preparing and live-testing it.
+A personal multi-agent engineering system on Claude Code with a Max subscription login. A Python state machine runs one agent at a time (Architect, Developer, Tester, and since Phase 5 a read-only Security reviewer) with schemas plus code rules, fix loops, checkpoints, approval gates and a local dashboard. The first external review of Phase 5 (at commit cf8cf811) returned 'do not ship' with 9 findings; all were accepted and fixed. THIS ROUND IS SCOPED to the change from cf8cf811 to the branch tip: verify that each of the 9 fixes really closes its finding, and look for anything the fixes broke or newly opened. The previous review's full findings and the builder's answers are in docs/review-response.md, section 'External review of Phase 5'. Do not re-review Phase 4 or unchanged Phase 5 code unless a fix points you there.
 
 ## Hard constraints of the whole system (check every change against them)
 - Billing: Claude Max subscription login only. No API key, no pay-per-token, no extra usage. The billing guard must stay fail-closed.
@@ -22,52 +23,49 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 - Personal use only.
 
 ## What this phase claims to deliver
-- A new 'security' role (.claude/agents/security.md: sonnet, tools Read/Bash/Grep/Glob, no Write/Edit) runs once per task, after the final regression passes, reviewing the whole finished workspace for concrete vulnerability classes (command/shell injection, committed secrets, path traversal, treating external content as instructions, unsafe deserialization, permission/access leaks) - never fixes anything, only reports
-- Every high/critical finding must quote real text from the file it names: semantics.security_evidence_errors reads the actual file in the workspace and requires the quoted evidence to be a real, contiguous substring (quote/whitespace-normalized via norm()), and refuses a path that resolves outside the workspace or does not exist
-- The verdict is derived from finding severities by code (semantics.derive_security_verdict), never trusted from the model: any high/critical finding forces 'fail' regardless of what the model itself reports; a self-reported 'blocked' (needs information only a human has) is never overridden
-- Wiring (loop.py/orchestrator.py): a 'fail' verdict stops the task with the exact same contract as a failed final regression (StepFailed -> blocked state) - the task never reaches the merge gate with a confirmed high/critical finding already in hand. A 'blocked' verdict raises NeedsInput. A 'pass' (no findings, or only low/medium) proceeds to the merge gate, and ANY findings - even non-blocking ones - are shown in the merge approval context the human reads before approving (orchestrator._merge_context / _security_summary), so nothing is silently dropped once it stops blocking
-- The security step is checkpointed exactly like the final regression (progress.json's new security_done key), including being invalidated by the same requirement-hash-change trigger that invalidates final_done
-- The security reviewer cannot edit anything: like the tester, any file it mutates via Bash (it has no Write/Edit tool, but Bash can still write via shell redirection) is detected and reverted, and the report is discarded - same defense-in-depth pattern already used for the tester's product-file-mutation guard
-- 'integrate' and 'deploy' were retired as separate specialist roles (decided with the user, not unilaterally): integration code is treated as a normal developer work item, gated by network/credential access - a Phase 6 concern (credentials/spend gates), not a new agent role; 'deploy' is already orchestrator.deliver()'s own job (branch/patch to a target repo). Removed as task states from schemas/task_state.schema.json and dashboard_data.py's MAIN_STATES (nothing had ever actually set either state); 'deploy' remains a valid gate TYPE in schemas/approval_request.schema.json, reserved for Phase 6 - a different, still-valid concept from the retired role
-- loop._load_progress() now merges the loaded JSON onto a defaults dict instead of returning the raw json.load() result, so a task's progress.json saved before this feature existed (missing e.g. the new security_done key) resumes instead of crashing with KeyError
-- Separately, not part of Phase 5 itself but shipped in the same unreviewed window: semantics.norm()/_squash() now strip quote characters ('/"/`) before comparing commands and output, fixing a false rejection for a command or its output paraphrased with a different quote style than what was actually logged
-- runner.get_backend()'s own fallback now defaults to 'cli' instead of 'sdk', matching every real entry point (orch.py, run_task.py, evals/run_evals.py, live_smoke.py already defaulted to cli explicitly). Separately, SdkBackend was live-verified this session (logs/smoke-1793988330.jsonl, by the user, in their own terminal - this reviewer cannot and should not attempt a live run) to connect correctly under the real subscription (apiKeySource='none') and respect --tools/--strict-mcp-config, but it NEVER populates AgentResult.tool_log even when the agent ran a real Bash command - confirmed unable to support evidence verification, documented as unsupported for real tasks rather than scheduled for more work
-- semantics._evidence_in_output's matching was extended: when the existing single-contiguous-match check (after stripping '...') fails, each '...'-delimited piece of the evidence is now checked as its own exact, in-order excerpt against the real output. This fixed a LIVE false rejection (first real Phase 5 task, T-0023): a tester check covering two scenarios legitimately quoted two genuinely non-adjacent real excerpts from two labelled sections of one batched script, joined by one '...' - both pieces were real and accurate, and the report was wrongly rejected. A wrong value in any piece (including the last one), or pieces claimed out of order, is still rejected exactly as before; the overall MIN_EVIDENCE_CHARS floor still applies to the total evidence length, so splitting into many trivial pieces cannot dodge it
-- Live-verified end to end (T-0023, 2026-11-06, run by the user in their own terminal): submit -> intake -> plan -> build -> test (hit the evidence-matching bug above, then passed on retry after the fix) -> final regression -> security review (verdict pass, 0 findings, with a reasoned summary that correctly distinguished the script's legitimate argv-based file access from a path-traversal flaw) -> merge gate -> approved -> delivered a real patch. 7 agent calls, about 46.5k tokens
-- semantics.plan_errors's call-cap formula and ledger.estimate_task_units were both updated to count the new security call (previously under-counted by exactly 1 call)
-- runner.FakeBackend now defaults an unconfigured 'security' role to a trivial pass response (test-only change, _DEFAULT_FAKE_RESPONSE), so the ~50 pre-existing happy-path tests across the whole suite did not all need to configure one; real backends are unaffected
-- 253 unit tests pass (0 failures, 3 skipped for a Windows privilege limitation unrelated to this phase); all new behavior above has a dedicated test
+- Finding 1 (read-only guard bypass): loop.guarded_call() records HEAD before a tester or security call and checks the workspace AFTER it, also when the call raised (invalid report, timeout, usage limit, KeyboardInterrupt). It detects working-tree changes, STAGED changes, and commits the role made itself. The tester keeps its legitimate qa_tests/ writes; the security reviewer may write nothing, qa_tests/ included
+- Finding 1, revert: loop._revert_agent_changes() uses `reset --mixed <before>` + checkout + clean (tester, qa_tests/ kept) or `reset --hard <before>` + clean (security), never `checkout -- .` alone, which restores from the already-changed index. The result is re-checked afterwards: if anything is still changed, the task stops with 'could NOT be reverted' instead of trusting unchecked git calls
+- Finding 1 applied to the TESTER's guard too (it predates Phase 5 and had the same holes); both roles now share guarded_call()
+- Finding 2: the '...'-pieces evidence fallback is REMOVED, not patched - no piece-by-piece match can stop a label from one line being glued to a value from another. One check's evidence is one excerpt; '...' only shortens it. The tester prompt now says one check per scenario, one excerpt per evidence
+- Finding 3: quote characters are no longer deleted before comparing. Quote STYLE is unified (' and ` become "), quote PRESENCE is kept - in commands, in tool output, and in security quotes
+- Finding 4: the final-regression and security 'done' flags each record the content id of the workspace they checked (loop._worktree_id: a git tree id built in a throwaway index, so uncommitted changes count and the real index is never touched). A different id resets the flag at the start of the next run. Uncommitted changes found right before the final regression can only be a human's manual fix; they are committed ('manual: ...') so they are tested, security-reviewed and delivered, and are not mistaken for tester edits. _worktree_id fails closed: a failed read raises instead of returning '' (two '' would compare equal)
+- Finding 5: the security prompt asks for [REDACTED] in place of the secret value only; semantics._quote_in_file checks the rest of the quote against ONE line of the file, pieces in order, a non-empty value at each mask. The old 'sk-...redacted' form is rejected
+- Finding 6: orchestrator._merge_diff_ref adds a hash of security_report.json, so an approval made for a different (or no) security report is stale and a new approval is requested
+- Finding 7: the schema caps findings at 10 and descriptions at 500 characters; the approval summary shows at most 10 findings, each description at most 200 characters, always names the full report, and comes before the (possibly long) file list; approvals.request marks a cut instead of cutting silently at 4000 characters
+- Finding 8: loop.refuse_unverifiable_backend raises before the first agent call (in loop.run_task, and in orchestrator._process before intake); 'sdk' is removed from orch.py run-next, run_task.py and run_evals.py. live_smoke.py and review-lessons keep it (no tool log needed there)
+- Finding 9: docs/agent-prompts-for-review.md is regenerated; scripts/gen_prompt_review.py now has render(), reads and writes UTF-8 (it used the Windows default code page before), and a test fails when the committed file differs from render()
+- Every fix has a dedicated test; 267 unit tests pass, 3 skipped (Windows symlink privilege)
 
 ## Files to read (start here)
-- [.claude/agents/security.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/security.md)  (49 lines)
-- [schemas/security_report.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/schemas/security_report.schema.json)  (114 lines)
-- [schemas/task_state.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/schemas/task_state.schema.json)  (53 lines)
-- [agentsys/config.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/config.py)  (60 lines)
-- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/loop.py)  (481 lines)
-- [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/orchestrator.py)  (363 lines)
+- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/loop.py)  (566 lines)
 - [agentsys/semantics.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/semantics.py)  (276 lines)
-- [agentsys/runner.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/runner.py)  (528 lines)
-- [agentsys/ledger.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/ledger.py)  (130 lines)
-- [agentsys/dashboard_data.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/dashboard_data.py)  (222 lines)
-- [scripts/seed_demo.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/seed_demo.py)  (25 lines)
-- [scripts/gen_prompt_review.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/gen_prompt_review.py)  (13 lines)
-- [tests/test_loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_loop.py)  (647 lines)
-- [tests/test_core.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_core.py)  (237 lines)
+- [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/orchestrator.py)  (381 lines)
+- [agentsys/approvals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/approvals.py)  (137 lines)
+- [.claude/agents/security.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/security.md)  (49 lines)
+- [.claude/agents/tester.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/tester.md)  (43 lines)
+- [schemas/security_report.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/schemas/security_report.schema.json)  (116 lines)
+- [scripts/gen_prompt_review.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/gen_prompt_review.py)  (27 lines)
+- [scripts/orch.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/orch.py)  (80 lines)
+- [scripts/run_task.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/run_task.py)  (26 lines)
+- [evals/run_evals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/evals/run_evals.py)  (215 lines)
+- [tests/test_loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_loop.py)  (781 lines)
+- [tests/test_phase3.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase3.py)  (584 lines)
+- [tests/test_core.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_core.py)  (243 lines)
+- [docs/review-response.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/docs/review-response.md)  (194 lines)
 
 ## Weak points the builder already suspects (confirm, refute, or rank them)
-- Security has been live-verified exactly ONCE (T-0023), on a tiny, genuinely clean one-file script with nothing to find. Its behavior on a workspace that actually DOES contain a real vulnerability, or a larger/messier diff, is completely unverified
-- With only one real run, there is no evidence yet about the security reviewer's false-positive/false-negative balance in either direction - unlike the tester/evidence-matching system, which has many more live data points behind it by now
-- No fix loop exists for a security 'fail': it is a hard stop (StepFailed -> blocked), exactly like a failed final regression. A human must manually address it and retry; the system never attempts to automatically fix a reported vulnerability. This is a design decision, not obviously a bug, but worth a second opinion
-- security_evidence_errors() only verifies HIGH/CRITICAL findings against real file content; LOW/MEDIUM findings are never evidence-checked before being shown to the human at the merge gate - a hallucinated low-severity finding would reach the human unchallenged (lower stakes, but still unverified)
-- The multi-segment evidence-matching fix was designed and tested against exactly the ONE live-reproduced scenario; it has not been stress-tested against pathological inputs (many short segments, or text that repeats in the output in a way that could make a segment's `.find(seg, pos)` land on the wrong occurrence)
-- Retiring 'integrate' and 'deploy' as specialist roles was a joint user/builder decision, not something an external reviewer has validated - worth a second opinion on whether the scope decision itself is sound, or whether e.g. a dedicated 'integrate' role would actually have been the safer design for Phase 6's credentials/spend access patterns
-- loop._load_progress()'s new merge-onto-defaults behavior was reasoned about but not exhaustively tested against every historical progress.json shape that might exist on the user's real, already-running task directories from before this change
-- This review is deliberately SCOPED to Phase 5 and the three fixes shipped alongside it, not a re-review of Phase 4's own code (already reviewed four times; the user decided to close it there) - please do not spend review budget re-auditing files this list does not mention unless something listed here points you back into them
+- Finding 2's fix brings back a known false rejection: live task T-0023's tester quoted two scenarios in one check and was rejected. The only mitigation is a prompt rule (one scenario per check). A rejected tester report still blocks the whole task - there is no one-time 'run it again' retry for evidence errors (there is one for coverage gaps)
+- guarded_call catches BaseException (KeyboardInterrupt included) and runs git commands before re-raising it. A second interrupt during the revert, or a git crash, is covered only by the post-revert re-check, not by any retry
+- The manual-fix rule commits ANY uncommitted change found right before the final regression. If something other than a human leaves files there (a bug in an earlier step), they would be committed and delivered - visible in the merge diff, but not flagged as unexpected
+- _worktree_id runs `git add -A` into a throwaway index on every run: it respects .gitignore (changes to ignored files do not count) and costs time on a large workspace
+- A task whose progress.json predates this change re-runs the final regression and security once (no stored content id) - safe, but it spends calls
+- Security severity is still the model's own label; the code derives the verdict from it but does not judge it
+- Live verification of these fixes: none. All evidence is unit tests with a FakeBackend and real git repositories
 
 ## How to verify without spending quota
 - `python -m unittest discover -s tests -t . -v`
 - `python evals/run_evals.py selfcheck`
-- `python scripts/gen_prompt_review.py   (prompts and schemas in sync)`
+- `python scripts/gen_prompt_review.py   (must leave docs/agent-prompts-for-review.md unchanged)`
 
 ## Review dimensions
 1. Correctness: logic errors, wrong state transitions, races, resume/crash behaviour.
@@ -77,12 +75,13 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 5. Test quality: tests that pass for the wrong reason, missing failure cases, tests that mirror the implementation.
 6. Maintainability and honesty of docs: do README and docs say what the code does? Anything claimed but not built?
 7. Specific questions for this phase:
-- security_evidence_errors()'s workspace path-escape check (resolve + relative_to) guards against a finding's `file` field pointing outside the workspace - was a SYMLINK inside the workspace pointing outside it (the same class of bug fixed for protect_config in the fourth review round of Phase 4) considered here, or only for the cleanup path?
-- Does treating a security 'fail' with the exact same no-retry hard-stop contract as a failed final regression make sense, or should it get its own distinct handling (e.g. forcing an explicit human choice between 'the developer fixes it' and 'accept this risk') instead of a generic orch.py retry?
-- Is deriving the verdict purely from severity labels the MODEL itself assigns (critical/high/medium/low) sound, or should the code make its own severity judgment for at least the most dangerous categories (e.g. a committed secret, command injection) regardless of what label the model chooses?
-- The multi-segment evidence fix uses str.find(seg, pos) per segment, left to right - walk through whether a pathological real output (a segment's text appearing twice, a false-positive earlier occurrence before the true one) could let a fabricated piece slip through
-- Anything in the retired 'integrate'/'deploy' decision that should be revisited before Phase 6 is designed, given Phase 6 is explicitly where their replacement gates (credentials/spend) are meant to live?
-- What would you test about the Security specialist that a FakeBackend-only test suite structurally cannot catch?
+- For each of the 9 findings in docs/review-response.md ('External review of Phase 5'): is it really closed, partly closed, or only moved? Re-run your original reproductions against the new code where you can
+- guarded_call: is there any path where an agent call ends (normally or by any exception) and the workspace check does NOT run? Is re-raising a non-StepFailed exception (e.g. a usage-limit pause) after a successful revert the right behavior?
+- _revert_agent_changes for the tester uses `reset --mixed <before>` and keeps qa_tests/. Can a tester use qa_tests/ (or a commit that touches both qa_tests/ and product files) to make a product change survive?
+- _worktree_id / the 'done' flags: can the workspace content change between the moment a check passes and the moment its id is recorded, so that the recorded id does not match what was checked? Is auto-committing uncommitted changes before the final regression safe?
+- With the '...' fallback removed and quote presence kept: is there any remaining way to make evidence with a different meaning match, or any common honest form that is now rejected that was not rejected before Phase 5?
+- _quote_in_file with [REDACTED]: can the mask be abused - for example, can a whole line be replaced by masks and short glue so that almost nothing real is checked?
+- What would you test that the new tests miss?
 
 ## Output format (use exactly this)
 1. **Verdict**: one of `ship`, `ship after fixes`, `do not ship`, with one sentence.

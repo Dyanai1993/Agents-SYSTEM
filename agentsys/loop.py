@@ -15,6 +15,7 @@ Git policy in the task workspace:
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -115,7 +116,11 @@ def _worktree_id(ws):
         env = dict(os.environ, GIT_INDEX_FILE=os.path.join(d, "index"))
         for args in (["read-tree", "HEAD"], ["add", "-A"]):
             subprocess.run(["git", *args], cwd=ws, env=env, capture_output=True, text=True)
-        return subprocess.run(["git", "write-tree"], cwd=ws, env=env, capture_output=True, text=True).stdout.strip()
+        tree = subprocess.run(["git", "write-tree"], cwd=ws, env=env, capture_output=True, text=True).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        # Fail closed: two failed reads would both be "" and compare equal, i.e. "unchanged" - skipping a check.
+        raise StepFailed(f"cannot compute the workspace content id in {ws}")
+    return tree
 
 
 def protect_qa(ws, task_id):
@@ -406,6 +411,12 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         mutated = _agent_mutations(ws, before, keep_qa)
         if mutated:
             _revert_agent_changes(ws, before, keep_qa)
+            left = _agent_mutations(ws, before, keep_qa)
+            if left:                         # git calls are unchecked: verify the result instead of trusting them
+                logger.log_event(task_id, "orchestrator", "alert", f"{role} changed files and they could NOT be reverted",
+                                 status="blocked", payload={"files": left})
+                raise StepFailed(f"{role} modified product files {mutated} and they could NOT be reverted ({left}): "
+                                 f"the workspace needs a human before anything else runs")
             logger.log_event(task_id, "orchestrator", "alert", f"{role} changed files it must not change: reverted, report invalid",
                              status="blocked", payload={"files": mutated, "call_error": str(err)[:300] if err else None})
             if err is None or isinstance(err, StepFailed):

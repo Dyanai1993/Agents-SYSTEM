@@ -305,6 +305,21 @@ class LoopTests(TmpHome):
         self.assertEqual(go("t1", fb2)["status"], "ready_for_review")
         self.assertEqual(roles(fb2), ["tester", "security"])
 
+    def test_the_workspace_content_id_fails_closed(self):
+        """Two failed reads would both be '' and compare equal - 'unchanged' - and skip a check."""
+        d = self.home / "not-a-repo"; d.mkdir()
+        with self.assertRaises(loop.StepFailed):
+            loop._worktree_id(d)
+
+    def test_a_failed_revert_is_reported_not_trusted(self):
+        """The revert's git calls are unchecked; the result is verified instead."""
+        from unittest import mock
+        fb = runner.FakeBackend({"architect": plan(1), "developer": self._dev_real(), "tester": t_pass,
+                                 "security": self._sec_doing(lambda ws: (ws / "app.py").write_text("tampered\n"))})
+        with mock.patch.object(loop, "_revert_agent_changes", lambda *a, **k: None):
+            r = go("t1", fb)
+        self.assertEqual(r["status"], "blocked"); self.assertIn("could NOT be reverted", r["message"])
+
     def test_the_sdk_backend_is_refused_before_any_call(self):
         """Phase 5 review: SdkBackend builds no tool log, so every tester report fails closed - after intake,
         plan and build had already spent real calls."""
