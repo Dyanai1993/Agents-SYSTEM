@@ -27,6 +27,20 @@ class WorkspaceSettingsGuardTests(TmpHome):
             runner.run_agent("smoke", "x", task_id="t1", backend=f, cwd=str(ws), env={})
         self.assertIn("apiKeyHelper", str(cm.exception)); self.assertEqual(f.calls, [])
 
+    def test_guard_respects_claude_config_dir_override(self):
+        """Review (fourth round): CLAUDE_CONFIG_DIR, when set, is where Claude Code actually reads its global
+        settings from instead of ~/.claude (official, documented behavior) - default_settings_paths()
+        ignored it unconditionally, so an alternate config dir with apiKeyHelper set was never even looked
+        at: the guard checked the WRONG (default) location, found nothing, and reported clean."""
+        self.sandbox_home()
+        alt = self.home / "alt_claude_config"; alt.mkdir(parents=True)
+        (alt / "settings.json").write_text(json.dumps({"apiKeyHelper": "echo k"}))
+        f = runner.FakeBackend({"smoke": {"ok": True}})
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(alt))
+        with self.assertRaises(billing_guard.BillingGuardError) as cm:
+            runner.run_agent("smoke", "x", task_id="t1", backend=f, env=env)
+        self.assertIn("apiKeyHelper", str(cm.exception)); self.assertEqual(f.calls, [])
+
     def test_clean_workspace_passes(self):
         self.sandbox_home()
         ws = self.home / "ws"; ws.mkdir()
@@ -48,6 +62,30 @@ class WorkspaceSettingsGuardTests(TmpHome):
         self.assertTrue([e for e in dd.all_events("t1")[0] if "Claude settings" in e["summary"]])
         log = loop._git(ws(), "log", "--name-only", "--format=").stdout
         self.assertNotIn("settings", log); self.assertNotIn("CLAUDE.md", log)
+
+    def test_a_symlinked_claude_dir_never_lets_cleanup_escape_the_workspace(self):
+        """Review (fourth round): if .claude is a SYMLINK to somewhere outside the workspace, is_dir()/rglob()
+        follow it transparently and hand back paths that only LOOK internal (pathlib builds them by joining
+        name components, never by resolving the link) - protect_config() then "removes the leak" by
+        unlinking that path, which the OS resolves through the symlink for real, deleting the EXTERNAL file."""
+        try:
+            probe = self.home / "probe_link"; probe.symlink_to(self.home)
+            probe.unlink()
+        except (OSError, NotImplementedError):
+            self.skipTest("this system does not allow creating symlinks (Windows needs Developer Mode or admin)")
+        outside = Path(tempfile.mkdtemp()) / "secret.txt"
+        outside.write_text("do not delete me")
+        ws = lambda: self.home / "tasks/t1/workspace"
+        def dev(prompt):
+            ws().mkdir(parents=True, exist_ok=True)
+            (ws() / ".claude").symlink_to(outside.parent, target_is_directory=True)
+            (ws() / "app.py").write_text("print(1)")
+            return DEV
+        r = go("t1", runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass}))
+        self.assertEqual(r["status"], "ready_for_review")
+        self.assertFalse((ws() / ".claude").exists())            # the symlink itself is gone
+        self.assertTrue(outside.exists())                        # the EXTERNAL file was never touched
+        self.assertEqual(outside.read_text(), "do not delete me")
 
     def test_a_staged_claude_settings_file_is_still_removed(self):
         """Review finding 6: `git ls-files` lists INDEX entries, not HEAD. A file the developer already
@@ -98,6 +136,67 @@ class CliBackendHardeningTests(TmpHome):
         with self.assertRaises(billing_guard.BillingGuardError):
             runner.run_agent("smoke", {}, task_id="t1", backend=runner.CliBackend(), env=env, settings_paths=[])
         self.assertLess(time.time() - t0, 15)               # killed at init, did not wait for the 30 s of "work"
+
+    def test_long_output_keeps_its_trailing_summary_not_just_the_head(self):
+        """Review (fourth round): truncating tool output to the first 4000 characters silently dropped real
+        evidence sitting at the END of a long run - e.g. unittest's own summary line, printed after every
+        per-test line. semantics.evidence_errors() then had nothing to match an honest, accurate quote
+        against, and rejected a correct report as fabricated."""
+        padding = "test_something (module.Case) ... ok\n" * 200     # well over 4000 characters
+        summary = "Ran 200 tests in 1.234s\n\nOK"
+        body = ("import json,sys\nsys.stdin.read()\n"
+                "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'none'}))\n"
+                "print(json.dumps({'type':'assistant','message':{'content':[{'type':'tool_use','id':'t1','name':'Bash','input':{'command':'python -m unittest -v'}}]}}))\n"
+                f"print(json.dumps({{'type':'user','message':{{'content':[{{'type':'tool_result','tool_use_id':'t1','content':[{{'type':'text','text':{json.dumps(padding + summary)}}}],'is_error':False}}]}}}}))\n"
+                "print(json.dumps({'type':'result','is_error':False,'result':'{}','usage':{}}))\n")
+        env = fake_claude(self.home, body)
+        r = runner.run_agent("smoke", {}, task_id="t7", backend=runner.CliBackend(), env=env, settings_paths=[])
+        self.assertTrue(r.ok)
+        self.assertIn(summary.replace("\n", ""), r.tool_log[0]["output"].replace("\n", ""))   # the tail survived truncation
+        from agentsys import semantics
+        from tests.helpers import report, _check
+        honest = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest -v", evidence=summary)])
+        self.assertEqual(semantics.evidence_errors(honest, r.tool_log, strict=True), [])
+
+    def test_a_popen_failure_closes_the_stderr_tempfile_instead_of_leaking_it(self):
+        """Review (fourth round): err_file was created BEFORE the try/finally that closes it - a Popen
+        failure happened in code that ran before that block even started, leaking the open temp file handle
+        with nothing left to ever close it."""
+        from unittest import mock
+        env = fake_claude(self.home, "import sys\nsys.stdin.read()\n")
+        created = []
+        real_tf = tempfile.TemporaryFile
+        def tracking_tf(*a, **kw):
+            f = real_tf(*a, **kw)
+            created.append(f)
+            return f
+        with mock.patch("tempfile.TemporaryFile", side_effect=tracking_tf), \
+             mock.patch("subprocess.Popen", side_effect=OSError("boom, cannot spawn")):
+            with self.assertRaises(OSError):
+                runner.run_agent("smoke", {}, task_id="t8", backend=runner.CliBackend(), env=env, settings_paths=[])
+        self.assertEqual(len(created), 1)
+        self.assertTrue(created[0].closed)
+
+    def test_bad_init_kills_the_job_handle_at_most_once(self):
+        """Review (fourth round): after an invalid-init kill already ran (closing the Windows Job handle on
+        this platform), the finally block's own cleanup tried to kill/close the SAME handle again if the
+        process still showed as running - a double CloseHandle, which can corrupt an unrelated resource if
+        the handle number was already reused by the OS in between."""
+        from unittest import mock
+        body = ("import json,sys,time\nsys.stdin.read()\n"
+                "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'user'}), flush=True)\n"
+                "time.sleep(30)\n")
+        env = fake_claude(self.home, body)
+        calls = []
+        real_kill_tree = runner._kill_tree
+        def counting(p, job=None):
+            calls.append(job)
+            return real_kill_tree(p, job)
+        with mock.patch("agentsys.runner._kill_tree", side_effect=counting):
+            with self.assertRaises(billing_guard.BillingGuardError):
+                runner.run_agent("smoke", {}, task_id="t9", backend=runner.CliBackend(), env=env, settings_paths=[])
+        non_none_calls = [c for c in calls if c is not None]
+        self.assertLessEqual(len(non_none_calls), 1)   # the job handle is never targeted by more than one kill
 
     def test_timeout_kills_the_whole_process_tree(self):
         """Windows live run: killing only the .cmd shim left the real child holding the pipe for the full 30 s."""
@@ -250,6 +349,53 @@ class EvalRunTests(TmpHome):
             self.assertEqual([r["id"] for r in saved["results"]], ["01-static-form"])   # task 1 saved; task 2 never ran
         finally:
             ev._git_state = real_git_state
+            for p in results_files:
+                p.unlink(missing_ok=True)
+
+    def test_commit_change_during_the_last_task_is_caught_at_the_end(self):
+        """Review (fourth round): the per-task drift check runs at the START of each iteration, so a change
+        landing DURING the last task was never caught - the loop just ended, and the run was still reported
+        complete=True under the stale original sha."""
+        ev = self.run_evals()
+        real_git_state = ev._git_state
+        calls = {"n": 0}
+        def fake():
+            calls["n"] += 1
+            return ("aaaaaaaa1111", "main", False) if calls["n"] <= 2 else ("ddddddddd4444", "main", False)
+        results_files = []
+        try:
+            ev._git_state = fake
+            with self.assertRaises(RuntimeError) as cm:
+                ev.run_real(self.backend(), "lastdrift", only=["01-static-form"], home=self.home / "r6")
+            self.assertIn("changed during the run", str(cm.exception))
+            results_files = sorted((ev.HERE / "results").glob("real-lastdrift-*.json"))
+            self.assertTrue(results_files)
+            saved = json.loads(results_files[-1].read_text())
+            self.assertFalse(saved["complete"])
+            self.assertEqual([r["id"] for r in saved["results"]], ["01-static-form"])  # the task itself did finish and get saved
+        finally:
+            ev._git_state = real_git_state
+            for p in results_files:
+                p.unlink(missing_ok=True)
+
+    def test_the_tree_becoming_dirty_mid_run_is_also_caught(self):
+        """Comparing only the sha missed a tree that became DIRTY mid-run with no new commit - the saved
+        result's git_dirty stayed whatever was true at the very start, never re-checked."""
+        ev = self.run_evals()
+        real_git_state = ev._git_state
+        calls = {"n": 0}
+        def fake():
+            calls["n"] += 1
+            return ("aaaaaaaa1111", "main", False) if calls["n"] <= 1 else ("aaaaaaaa1111", "main", True)
+        results_files = []
+        try:
+            ev._git_state = fake
+            with self.assertRaises(RuntimeError) as cm:
+                ev.run_real(self.backend(), "dirtydrift", only=["01-static-form"], home=self.home / "r7")
+            self.assertIn("changed mid-run", str(cm.exception)); self.assertIn("dirty=True", str(cm.exception))
+        finally:
+            ev._git_state = real_git_state
+            results_files = sorted((ev.HERE / "results").glob("real-dirtydrift-*.json"))
             for p in results_files:
                 p.unlink(missing_ok=True)
 

@@ -46,18 +46,26 @@ def check_env(env=None) -> list:
     return problems
 
 
-def default_settings_paths(cwd=None) -> list:
+def default_settings_paths(cwd=None, env=None) -> list:
+    """Review (fourth round): `CLAUDE_CONFIG_DIR`, when set, replaces ~/.claude as where Claude Code reads
+    its global settings from (official, documented behavior) - this used to be ignored unconditionally, so
+    an alternate settings directory with e.g. apiKeyHelper set was never checked at all: check_settings()
+    looked at the wrong (default) location and came back clean while the REAL one, about to be read by the
+    actual agent process, was never inspected. Must use the CHILD's env (what will actually be passed to the
+    agent subprocess), not this process's own os.environ, since a caller can override it per call."""
+    env = os.environ if env is None else env
     cwd = Path(cwd or os.getcwd())
+    config_dir = Path(env.get("CLAUDE_CONFIG_DIR")) if (env.get("CLAUDE_CONFIG_DIR") or "").strip() else Path.home() / ".claude"
     return [
-        Path.home() / ".claude" / "settings.json",
+        config_dir / "settings.json",
         cwd / ".claude" / "settings.json",
         cwd / ".claude" / "settings.local.json",
     ]
 
 
-def check_settings(paths=None) -> list:
+def check_settings(paths=None, env=None) -> list:
     problems = []
-    for p in paths if paths is not None else default_settings_paths():
+    for p in paths if paths is not None else default_settings_paths(env=env):
         p = Path(p)
         if not p.is_file():
             continue
@@ -97,7 +105,7 @@ def check_init_message(init) -> list:
 
 
 def run_guard(*, env=None, settings_paths=None, init=None, require_init=False, raise_on_fail=True) -> list:
-    problems = check_env(env) + check_settings(settings_paths)
+    problems = check_env(env) + check_settings(settings_paths, env=env)
     if init is not None or require_init:
         problems += check_init_message(init)
     if problems and raise_on_fail:

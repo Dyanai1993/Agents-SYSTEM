@@ -422,6 +422,21 @@ class SemanticsTests(unittest.TestCase):
         honest = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="FAILED (failures=3)")])
         self.assertEqual(semantics.evidence_errors(honest, log, strict=True), [])
 
+    def test_a_shared_label_cannot_smuggle_a_different_verdict_or_value(self):
+        """Review (fourth round): the 75%-of-evidence ratio let a long shared LABEL dominate the match while
+        the actual differing payload (the part that does the claiming) was never itself verified - a
+        12-of-16-character shared prefix "test_result:" cleared 75% even though the real verdict differed."""
+        log = [{"tool": "Bash", "command": "python -m unittest", "output": "test_result: FAIL"}]
+        wrong_verdict = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="test_result: PASS")])
+        self.assertTrue(semantics.evidence_errors(wrong_verdict, log, strict=True))
+        log2 = [{"tool": "Bash", "command": "cat report.json", "output": "revenue: 45.0"}]
+        wrong_number = report("pass", [_check("x", "pass", ["W1.1"], command="cat report.json", evidence="revenue: 57.5")])
+        self.assertTrue(semantics.evidence_errors(wrong_number, log2, strict=True))
+        # the honest case (label + the REAL trailing value) must still pass
+        honest = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="test_result: FAIL")])
+        log3 = [{"tool": "Bash", "command": "python -m unittest", "output": "actual test_result: FAIL"}]  # a real prefix label too
+        self.assertEqual(semantics.evidence_errors(honest, log3, strict=True), [])
+
     def test_command_matching_ignores_whitespace(self):
         r = report("pass", [_check("a", "pass", ["W1.1"], command="python  -m   unittest")])
         self.assertEqual(semantics.evidence_errors(r, [{"tool": "Bash", "command": "python -m unittest"}], strict=True), [])

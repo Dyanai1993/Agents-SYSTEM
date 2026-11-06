@@ -19,7 +19,14 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+        # Review (fourth round): without these, the dashboard (which performs approval actions) could be
+        # embedded in an attacker's iframe and used for clickjacking. X-Frame-Options covers older browsers;
+        # frame-ancestors is the modern CSP equivalent.
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'",
+        )
         self.end_headers()
         self.wfile.write(b)
 

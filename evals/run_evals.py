@@ -97,11 +97,16 @@ def run_real(backend, label, only=None, home=None, token_budget=None, resume_dir
             # task as the (possibly hours-long, sequential) run proceeds - a commit landing mid-run would
             # otherwise be silently measured by later tasks while the whole run still reports the FIRST sha,
             # as if every task had been measured under one single, consistent version.
-            now_sha = _git_state()[0]
-            if now_sha != sha:
-                raise RuntimeError(f"the repository changed mid-run: started on {sha[:8]}, now on {now_sha[:8]} "
-                                    f"(at task {task.name}). Results so far are saved; nothing after this is measured "
-                                    f"under one consistent commit. Start a new run on a frozen checkout instead.")
+            # Review (fourth round): comparing only the sha missed an UNCOMMITTED change appearing mid-run -
+            # the run's reported git_dirty is whatever was true at the very START, never re-checked, so a
+            # tree that became dirty partway through was still reported clean. Comparing (sha, dirty)
+            # catches both directions of drift.
+            now_sha, _, now_dirty = _git_state()
+            if (now_sha, now_dirty) != (sha, dirty):
+                raise RuntimeError(f"the repository changed mid-run: started on {sha[:8]} (dirty={dirty}), now on "
+                                    f"{now_sha[:8]} (dirty={now_dirty}) (at task {task.name}). Results so far are "
+                                    f"saved; nothing after this is measured under one consistent commit. Start a "
+                                    f"new run on a frozen checkout instead.")
             if token_budget and token_budget - spent <= 0:
                 rows.append({"id": task.name, "passed": False, "status": "skipped_budget", "fix_loops": 0, "replans": 0, "calls": 0,
                              "tokens": 0, "seconds": 0, "detail": "token budget for the eval run was used up"})
@@ -131,6 +136,17 @@ def run_real(backend, label, only=None, home=None, token_budget=None, resume_dir
             os.environ.pop("AGENTSYS_HOME", None)
         else:
             os.environ["AGENTSYS_HOME"] = old_home
+    # Review (fourth round): the per-task drift check runs at the START of each iteration, so a change
+    # landing DURING the LAST task was never caught - the loop simply ends, and the run was still reported
+    # complete=True under the original, now-stale sha. Check once more right before finalizing.
+    final_sha, _, final_dirty = _git_state()
+    if (final_sha, final_dirty) != (sha, dirty):
+        meta = {"mode": "real", "run_id": run_id, "label": label, "git_sha": sha, "git_branch": branch, "git_dirty": dirty, "complete": False,
+                "ts": datetime.now(timezone.utc).isoformat(), "backend": getattr(backend, "name", "?"), "results": rows}
+        path.write_text(json.dumps(meta, indent=2))
+        raise RuntimeError(f"the repository changed during the run: started on {sha[:8]} (dirty={dirty}), now on "
+                            f"{final_sha[:8]} (dirty={final_dirty}). Results are saved but NOT marked complete - "
+                            f"the last task(s) may not be measured under one consistent commit.")
     out = {"mode": "real", "run_id": run_id, "label": label, "git_sha": sha, "git_branch": branch, "git_dirty": dirty, "complete": not only,
            "ts": datetime.now(timezone.utc).isoformat(), "backend": getattr(backend, "name", "?"), "results": rows}
     path.write_text(json.dumps(out, indent=2))

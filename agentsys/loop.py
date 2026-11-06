@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import subprocess
+from pathlib import Path
 
 from . import approvals, billing_guard, config, control, logger, memory, runner, schema, semantics, tasks
 from .ledger import BudgetExceeded, Ledger, Window, estimate_task_units
@@ -101,13 +102,29 @@ def _config_leak_paths(ws):
     A user's global git ignore commonly excludes .claude/settings.local.json (the recommended
     setup to avoid committing personal Claude Code settings), which makes `git status` blind to
     it. Scanning the filesystem directly means the guard still catches it.
+
+    Review (fourth round): if an agent makes .claude (or any directory under the workspace) a SYMLINK to
+    somewhere outside it, `Path.is_dir()`/`rglob()` follow the link transparently - they would enumerate
+    the EXTERNAL target's real files and hand back paths that only LOOK like they are inside the workspace
+    (e.g. ".claude/secret.txt"), because pathlib builds those paths by joining name components, never by
+    resolving the symlink. protect_config() then happily "removes the leak" by unlinking that path - which
+    the OS resolves through the symlink for real, deleting the EXTERNAL file. A symlinked .claude is
+    therefore never followed at all: it is itself the whole leak, removed as a single entry (unlinking a
+    symlink never touches whatever it points to). The same applies to any OTHER symlinked subdirectory
+    found while walking for a stray CLAUDE.md: never descend into one.
     """
     bad = []
     cfg = ws / ".claude"
-    if cfg.is_dir():
+    if os.path.islink(cfg):
+        bad.append(".claude")                    # the symlink itself is the leak; never follow it to look inside
+    elif cfg.is_dir():
         found = False
-        for p in cfg.rglob("*"):
-            if p.is_file():
+        for root, dirs, files in os.walk(cfg):
+            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+            for fn in files:
+                p = Path(root) / fn
+                if os.path.islink(p):
+                    continue                     # a symlinked "file" entry is handled as its own leak below if it matters
                 bad.append(p.relative_to(ws).as_posix())
                 found = True
         if not found:
@@ -115,7 +132,7 @@ def _config_leak_paths(ws):
     elif cfg.exists():
         bad.append(".claude")                    # not a directory (unexpected, but still a leak)
     for root, dirs, files in os.walk(ws):
-        dirs[:] = [d for d in dirs if d != ".git" and d != ".claude"]
+        dirs[:] = [d for d in dirs if d not in (".git", ".claude") and not os.path.islink(os.path.join(root, d))]
         rel_root = os.path.relpath(root, ws).replace("\\", "/")
         prefix = "" if rel_root == "." else rel_root + "/"
         for fn in files:
@@ -130,6 +147,19 @@ def protect_config(ws, task_id, who):
     if bad:
         for f in bad:
             path = ws / f
+            if os.path.islink(path):
+                # Remove the LINK itself, never its target (which _config_leak_paths never followed to
+                # begin with - see its docstring). os.unlink fails on a Windows directory-symlink/junction;
+                # os.rmdir removes the reparse point there without touching whatever it points to.
+                _git(ws, "reset", "-q", "--", f)
+                try:
+                    os.unlink(path)
+                except OSError:
+                    try:
+                        os.rmdir(path)
+                    except OSError:
+                        pass
+                continue
             # `git ls-files` lists INDEX entries, not HEAD: a file the agent just `git add`ed is "tracked" by
             # that check, and `checkout -- f` would only restore it from the (still bad) index - a no-op that
             # leaves it staged, so the next commit_changes() call commits it anyway. Unstage unconditionally,
@@ -144,7 +174,7 @@ def protect_config(ws, task_id, who):
             else:
                 path.unlink(missing_ok=True)
         cfg = ws / ".claude"
-        if cfg.is_dir() and not any(cfg.rglob("*")):
+        if not os.path.islink(cfg) and cfg.is_dir() and not any(cfg.rglob("*")):
             import shutil
             shutil.rmtree(cfg, ignore_errors=True)               # no empty settings folder is left behind
         logger.log_event(task_id, "orchestrator", "alert", f"{who} wrote Claude settings in the workspace: removed", status="blocked", payload={"files": bad})

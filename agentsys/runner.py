@@ -52,6 +52,20 @@ def looks_like_limit(text: str) -> bool:
     return bool(_LIMIT_PAT.search(text or ""))
 
 
+def _cap_output(text, limit=4000):
+    """Review (fourth round): truncating to the first `limit` characters silently dropped real evidence
+    that sits at the END of a long tool output - e.g. unittest's own summary line ("Ran 50 tests ... OK"),
+    printed after all the per-test output, was simply gone past 4000 characters. semantics.evidence_errors()
+    then had nothing to match an honest, accurate quote against, and rejected a correct report as if it
+    were fabricated. Keeping head AND tail (half the budget each) means a long run's final summary survives
+    truncation just as reliably as its first lines do."""
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n...[truncated]...\n" + text[-half:]
+
+
 def extract_json(text: str):
     """Pull one JSON object out of agent text: whole text, a ```json block, or first{..last}."""
     text = (text or "").strip()
@@ -226,25 +240,42 @@ class CliBackend:
         t0 = time.time()
         import tempfile
         import threading
+        # Review (fourth round): err_file (and, if Popen itself fails after spawning but before job/timer/the
+        # feeder thread are set up, the orphaned child process p) used to be created BEFORE the try/finally
+        # below even starts - a Popen failure, or any exception from _create_job_for, left the stderr file
+        # handle (and possibly a live orphaned process) leaked with nothing to ever close or kill it.
         err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
-        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True, cwd=cwd, env=env,
-                             start_new_session=(os.name != "nt"))
-        job = _create_job_for(p.pid) if os.name == "nt" else None      # assigned ASAP: see _create_job_for's docstring
-        timed_out = threading.Event()
+        p = job = timer = None
+        try:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True, cwd=cwd, env=env,
+                                 start_new_session=(os.name != "nt"))
+            job = _create_job_for(p.pid) if os.name == "nt" else None  # assigned ASAP: see _create_job_for's docstring
+            timed_out = threading.Event()
 
-        def kill_on_timeout():
-            timed_out.set()
-            _kill_tree(p, job)
-        timer = threading.Timer(limits.timeout_s, kill_on_timeout)
-        timer.start()
+            def kill_on_timeout():
+                timed_out.set()
+                _kill_tree(p, job)
+            timer = threading.Timer(limits.timeout_s, kill_on_timeout)
+            timer.start()
 
-        def feed():
-            try:
-                p.stdin.write(prompt)
-                p.stdin.close()
-            except (OSError, ValueError):
-                pass
-        threading.Thread(target=feed, daemon=True).start()
+            def feed():
+                try:
+                    p.stdin.write(prompt)
+                    p.stdin.close()
+                except (OSError, ValueError):
+                    pass
+            threading.Thread(target=feed, daemon=True).start()
+        except Exception:
+            if timer is not None:
+                timer.cancel()
+            if p is not None:
+                _kill_tree(p, job)
+                try:
+                    p.wait(timeout=10)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+            err_file.close()
+            raise
         init, result = None, None
         calls, outputs = {}, {}
         stderr = ""
@@ -258,16 +289,16 @@ class CliBackend:
                     init = msg
                     problems = billing_guard.check_init_message(msg)
                     if problems:
-                        _kill_tree(p, job)              # stop before the agent does any work
+                        _kill_tree(p, job); job = None  # stop before the agent does any work; never close this handle again (see finally)
                         raise billing_guard.BillingGuardError(problems)
                 elif msg.get("type") == "result":
                     if init is None:          # stream completed (or skipped straight to a result) without ever
-                        _kill_tree(p, job)     # proving the credential source: fail closed, same as a bad init
+                        _kill_tree(p, job); job = None     # proving the credential source: fail closed, same as a bad init
                         raise billing_guard.BillingGuardError(["no init message received before the result: cannot prove the credential source"])
                     result = msg
                 elif msg.get("type") in ("assistant", "user"):
                     if init is None:          # real agent output arrived before any init message: the process did
-                        _kill_tree(p, job)     # work with an unverified credential source - stop it now, not after
+                        _kill_tree(p, job); job = None     # work with an unverified credential source - stop it now, not after
                         raise billing_guard.BillingGuardError(["no init message received before agent output: cannot prove the credential source"])
                     content = (msg.get("message") or {}).get("content")
                     for blk in content if isinstance(content, list) else []:
@@ -279,7 +310,7 @@ class CliBackend:
                             out = blk.get("content")
                             if isinstance(out, list):
                                 out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
-                            outputs[blk.get("tool_use_id")] = (str(out or "")[:4000], bool(blk.get("is_error")))
+                            outputs[blk.get("tool_use_id")] = (_cap_output(out), bool(blk.get("is_error")))
             p.wait()
         finally:
             timer.cancel()
@@ -416,7 +447,8 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
             system_prompt = None
 
     if settings_paths is None:        # check the settings the agent process will really read: ours AND its working directory's
-        settings_paths = billing_guard.default_settings_paths(os.getcwd()) + (billing_guard.default_settings_paths(cwd)[1:] if cwd else [])
+        settings_paths = (billing_guard.default_settings_paths(os.getcwd(), env=env)
+                          + (billing_guard.default_settings_paths(cwd, env=env)[1:] if cwd else []))
     billing_guard.run_guard(env=env, settings_paths=settings_paths)   # every call, not only at startup
     if model == "opus":
         approvals.require_opus(task_id)                               # Opus only with a human decision file

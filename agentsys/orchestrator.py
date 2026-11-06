@@ -12,11 +12,11 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import approvals, config, intake, logger, loop, memory, runner, schema, tasks
+from . import approvals, config, control, intake, logger, loop, memory, runner, schema, tasks
+from .filelock import FileLock, LockBusy
 from .ledger import BudgetExceeded, Ledger
 
 RESET_GUESS_S = 5 * 3600     # (assumption) when a usage limit hits, retry after this long
-LOCK_STALE_S = 2 * 3600      # a lock older than this belongs to a dead run
 
 
 class TaskBusy(RuntimeError):
@@ -24,26 +24,21 @@ class TaskBusy(RuntimeError):
 
 
 class _Lock:
+    """A real OS-level lock (see filelock.FileLock): atomic acquire, auto-released if the owner dies, the
+    lock file itself never deleted. Review (fourth round): the previous create-a-file-and-check-its-mtime
+    scheme had a real stale-lock-takeover race and a release that could delete a DIFFERENT process's lock."""
     def __init__(self, task_id):
-        self.path = _qdir() / f"{task_id}.lock"
+        self._inner = FileLock(_qdir() / f"{task_id}.lock")
 
     def __enter__(self):
-        import os, time
-        for _ in range(2):
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode())
-                os.close(fd)
-                return self
-            except FileExistsError:
-                if time.time() - self.path.stat().st_mtime > LOCK_STALE_S:
-                    self.path.unlink(missing_ok=True)        # stale: the owner died
-                    continue
-                raise TaskBusy(f"task is being processed by another run ({self.path.name})")
-        raise TaskBusy("could not take the task lock")
+        try:
+            self._inner.__enter__()
+        except LockBusy as e:
+            raise TaskBusy(f"task is being processed by another run ({self._inner.path.name})") from e
+        return self
 
     def __exit__(self, *exc):
-        self.path.unlink(missing_ok=True)
+        return self._inner.__exit__(*exc)
 
 
 def _qdir():
@@ -95,6 +90,19 @@ def retry(task_id, answer=None):
     `answer` is the human's reply to a question: it is added as a constraint ("Clarification: ...") and any blocking
     unknown in the requirement is marked answered. A task waiting for an approval is decided, not retried.
     """
+    try:
+        with _Lock(task_id):
+            return _retry(task_id, answer)
+    except LockBusy as e:
+        raise TaskBusy(f"task is being processed by another run ({task_id}.lock)") from e
+
+
+def _retry(task_id, answer=None):
+    # Review (fourth round): retry() used to read/write the queue entry with no lock at all, unlike
+    # process() - a retry's freshly-saved answer/constraint could be silently overwritten moments later by
+    # an in-flight process() call's own finish(), which holds a copy of the entry read BEFORE the retry and
+    # writes it back blindly, discarding the answer. Locked the same way process() is, so the two can never
+    # interleave on the same task_id.
     entry = load_entry(task_id)
     if entry is None:
         raise KeyError(task_id)
@@ -176,8 +184,18 @@ def deliver(task_id, target_repo=None):
         # never inferred just from the branch existing. Without this, deliver() would delete a same-named
         # branch it never created (e.g. the user's own unrelated work).
         ours = bool(journal) and journal.get("target_repo") == str(repo) and journal.get("branch") == branch
-        if (ours and journal.get("state") == "delivered" and journal.get("ws_sha") == ws_sha
-                and _branch_exists_in(repo, branch)):
+        branch_exists = _branch_exists_in(repo, branch)
+        branch_sha = loop._git(repo, "rev-parse", branch).stdout.strip() if branch_exists else None
+        # The journal proves we created this branch, not that its CURRENT content is still what we last
+        # left it at: someone could commit more work onto it in the target repo directly. branch_sha (the
+        # branch's own HEAD, recorded when we last wrote it) catches that drift in BOTH directions - it
+        # must never silently count as "still a valid delivery" (ws_sha alone does not prove the branch
+        # itself is untouched), and it must never be silently deleted as "our stale leftover" either.
+        if ours and branch_exists and journal.get("branch_sha") and journal["branch_sha"] != branch_sha:
+            raise RuntimeError(f"branch {branch} in {repo} has changed since this task last delivered to it "
+                              f"(expected {journal['branch_sha'][:8]}, found {branch_sha[:8]}): not touching it. "
+                              f"Move any work on it first, or delete it yourself for a fresh delivery.")
+        if ours and journal.get("state") == "delivered" and journal.get("ws_sha") == ws_sha and branch_exists:
             result["branch"] = branch           # already delivered here before, for this EXACT content: nothing more to do
             return result
         if ours and journal.get("orig_branch"):
@@ -189,10 +207,11 @@ def deliver(task_id, target_repo=None):
             orig_branch = loop._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "HEAD"
             if orig_branch == branch:
                 raise RuntimeError(f"{repo} is on {branch} with no record of how it got there: check it out to a safe branch yourself first")
-        if _branch_exists_in(repo, branch):
+        if branch_exists:
             if not ours:
                 raise RuntimeError(f"branch {branch} already exists in {repo} and was not created by this task's delivery: not touching it")
-            # Ours, but not a confirmed-current delivery: a leftover from a crashed or failed attempt.
+            # Ours, matching what we last left it at (drift was already ruled out above): a leftover from a
+            # crashed or failed attempt, safe to replace.
             current = loop._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
             if current == branch and loop._git(repo, "checkout", "-q", orig_branch).returncode:
                 raise RuntimeError(f"cannot check out {orig_branch} in {repo} to clean up the stale branch {branch}")
@@ -208,7 +227,9 @@ def deliver(task_id, target_repo=None):
             loop._git(repo, "checkout", "-q", orig_branch)      # leave the target repo where it was, not on the broken branch
             loop._git(repo, "branch", "-D", branch)
             raise RuntimeError(f"patches do not apply cleanly on {repo}: {am.stderr.strip()[:200]}")
-        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "ws_sha": ws_sha, "state": "delivered"}), encoding="utf-8")
+        new_branch_sha = loop._git(repo, "rev-parse", branch).stdout.strip()
+        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch,
+                                      "ws_sha": ws_sha, "branch_sha": new_branch_sha, "state": "delivered"}), encoding="utf-8")
         result["branch"] = branch
     return result
 
@@ -236,6 +257,25 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
         entry.update(status=status, note=note, **extra)
         save_entry(entry)
         return entry
+
+    def stopped_by_control():
+        # Review (fourth round): control.read() was checked ONLY inside loop.py's agent() wrapper, i.e. only
+        # when there was still an actual agent call left to make. A task sitting at an already-approved
+        # merge gate with nothing left for the build loop to do (or one that hasn't even started intake
+        # yet) ran straight through pause/stop untouched - including delivery itself, which a human setting
+        # "stop" would reasonably expect to be prevented.
+        ctl = control.read(task_id)
+        if ctl == "pause":
+            tasks.set_state(task_id, "paused", title=entry["title"])
+            return finish("paused", "paused by user")
+        if ctl == "stop":
+            tasks.set_state(task_id, "blocked", title=entry["title"])
+            return finish("stopped", "stopped by user")
+        return None
+
+    r = stopped_by_control()
+    if r is not None:
+        return r
 
     # ---- intake (only when no structured requirement exists yet)
     req = entry["requirements"]
@@ -284,6 +324,9 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
     if st == "rejected":
         tasks.set_state(task_id, "blocked", title=entry["title"])
         return finish("rejected", "merge rejected by user")
+    r = stopped_by_control()          # approved and about to touch a real target repo: check again right before
+    if r is not None:
+        return r
     try:
         d = deliver(task_id, entry["target_repo"])
     except RuntimeError as e:

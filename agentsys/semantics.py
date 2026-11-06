@@ -85,15 +85,25 @@ MIN_SHARE = 0.75
 def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
     """True when the evidence excerpt is really in a tool output.
 
-    Models add labels around real output ("stderr: ...", "exit code 1, ..."), shorten it with "...",
-    or quote a path that Git Bash rewrote. So the test is: the longest run of evidence characters that
-    appears unchanged in the output must be at least 6 characters AND 75% of the evidence.
-    Short evidence ('OK', '0') can never pass this: it needs a matching command instead.
+    Models add labels BEFORE real output ("stderr: ...", "exit code 1, ..."), shorten it with "...", or
+    quote a path that Git Bash rewrote. So a run of evidence characters that appears unchanged in the
+    output, at least 6 characters and 75% of the evidence, is allowed - PROVIDED that run reaches all the
+    way to the END of the evidence. A label/prefix before the real content can be ignored; the payload
+    (the actual value or verdict, which normally comes last) cannot.
+
+    Review (fourth round): without the "reaches the end" requirement, a long shared LABEL could dominate
+    the ratio while a short but different trailing value slipped through unverified - "test_result: PASS"
+    matched against a real "test_result: FAIL" shared a 12-of-16-character prefix ("test_result:"), clearing
+    75%, while the actual verdict word was never checked against reality at all. Requiring the match to
+    reach the evidence's own end means whatever is claimed LAST - the part doing the actual claiming - must
+    be an exact, unbroken match; only text BEFORE it may be fuzzy/absent from the real output.
     """
     ev = _squash(re.sub(r"\.\.\.|\u2026", "", evidence or ""))      # '...' marks a cut, not content
     if len(ev) < MIN_EVIDENCE_CHARS or not outputs_squashed:
         return False
     m = difflib.SequenceMatcher(None, ev, outputs_squashed, autojunk=False).find_longest_match(0, len(ev), 0, len(outputs_squashed))
+    if m.a + m.size != len(ev):      # evidence has its own unmatched tail: the claimed payload itself differs
+        return False
     return m.size >= max(MIN_EVIDENCE_CHARS, MIN_SHARE * len(ev))
 
 

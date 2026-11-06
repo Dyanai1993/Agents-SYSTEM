@@ -137,8 +137,20 @@ def _tokens(text):
     return {t for t in re.findall(r"[a-z0-9]{4,}", (text or "").lower())}
 
 
+_SAFE_LESSON_LINES = {(role, text[:200]) for role, text in TEMPLATES.values()}
+
+
 def retrieve(role, text, k=None):
-    """At most K lessons for this role (or 'all'), best keyword overlap first. Returns plain strings <= 200 chars."""
+    """At most K lessons for this role (or 'all'), best keyword overlap first. Returns plain strings <= 200 chars.
+
+    Review (fourth round): inbox_lessons() re-derives text/role from TEMPLATES on every read (round 3 fix),
+    but retrieve() parses memory/lessons.md DIRECTLY - a separate, already-consolidated file that could have
+    been written by an older version of this code (before templates existed) or tampered with, and is only
+    rebuilt the next time consolidate() happens to run. A stale or malicious line there went straight into
+    an agent prompt, completely bypassing the canonical, now-safe loading path. Only a line whose (role,
+    text) exactly matches a CURRENT template is ever used; anything else is silently dropped, regardless of
+    how it ended up on disk.
+    """
     k = config.LESSON_RETRIEVE_K if k is None else k
     p = config.home() / "memory" / "lessons.md"
     if not p.exists():
@@ -148,6 +160,8 @@ def retrieve(role, text, k=None):
     for line in p.read_text(encoding="utf-8").splitlines():
         m = _LINE.match(line)
         if not m or m.group(1) not in (role, "all"):
+            continue
+        if (m.group(1), m.group(2)) not in _SAFE_LESSON_LINES:
             continue
         scored.append((len(want & _tokens(m.group(2))) + int(m.group(3)) * 0.1 + (0.5 if m.group(1) == role else 0), m.group(2)))
     scored.sort(key=lambda x: -x[0])

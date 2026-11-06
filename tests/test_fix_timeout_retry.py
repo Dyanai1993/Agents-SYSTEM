@@ -66,6 +66,22 @@ class TimeoutClockTests(TmpHome):
 
 
 class RetryTests(TmpHome):
+    def test_retry_is_refused_not_racing_while_process_holds_the_lock(self):
+        """Review (fourth round): retry() used to read/write the queue entry with no lock at all. A retry's
+        freshly-saved answer could be silently overwritten moments later by an in-flight process() call's
+        own finish(), which holds a stale in-memory copy of the entry read BEFORE the retry and writes it
+        back blindly on completion - discarding the answer with no error to anyone. Locking retry() the
+        same way process() is locked means a concurrent retry is refused outright instead of racing."""
+        orchestrator.submit("t1", requirements=dict(REQ, unknowns=[{"question": "Which cloud?", "blocking": True}]))
+        proc("t1", fb())
+        self.assertEqual(orchestrator.load_entry("t1")["status"], "needs_input")
+        with orchestrator._Lock("t1"):                        # simulates an in-flight process() call
+            with self.assertRaises(orchestrator.TaskBusy):
+                orchestrator.retry("t1", answer="AWS, region eu-west-1")
+        self.assertEqual(orchestrator.load_entry("t1")["status"], "needs_input")   # untouched, not half-applied
+        e = orchestrator.retry("t1", answer="AWS, region eu-west-1")              # released: now it works
+        self.assertEqual(e["requirements"]["constraints"][-1], "Clarification from the user: AWS, region eu-west-1")
+
     def test_retry_requeues_and_resumes_from_the_checkpoint(self):
         orchestrator.submit("t1", requirements=REQ)
         f = fb(developer=runner.UsageLimitReached("limit"))

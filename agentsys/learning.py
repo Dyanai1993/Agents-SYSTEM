@@ -6,6 +6,7 @@ gate()     validates a BEFORE and an AFTER real eval run (same full suite, tied 
 recover()  cleans up after an interrupted apply
 Nothing here merges into main or pushes.
 """
+import functools
 import hashlib
 import json
 import os
@@ -16,10 +17,34 @@ import time
 from pathlib import Path
 
 from . import approvals, config, logger, memory, runner, schema
+from .filelock import FileLock, LockBusy
 
 TARGET_RE = re.compile(r"^(\.claude/agents/(architect|developer|tester|orchestrator)\.md|memory/patterns/[A-Za-z0-9_-]{1,40}\.md)$")
 FORBIDDEN_NEW = re.compile(r"\b(skip|ignore|waive|disable|bypass|api[ _-]?key|approve[sd]?|without (test|check|verif)\w*|no need to (test|check))\b", re.I)
 MARKERS = re.compile(r"\b(never|do not|must not|only|forbidden)\b", re.I)
+
+
+class ApplyBusy(RuntimeError):
+    """Another apply()/gate()/recover() call is using the repo working tree right now."""
+
+
+def _locked(fn):
+    """apply(), gate() and recover() all check out branches, edit files and commit directly in repo() - ONE
+    shared working tree. Review (fourth round): with no lock at all, two concurrent calls (even for
+    different proposals) could interleave their git operations arbitrarily - reproduced with threads, one
+    call finishing and returning to main while another, paused mid-way, went on to commit onto main."""
+    @functools.wraps(fn)
+    def wrapper(*a, **kw):
+        try:
+            # queue/, not memory/: in the "home and repo are the same folder" layout (first review,
+            # finding 3) a lock file under memory/ would be a new untracked file INSIDE the repo's own
+            # working tree, and apply()'s own "the repo has uncommitted changes" check would then refuse
+            # to run at all. queue/ is already fully gitignored project-wide, same as orchestrator's lock.
+            with FileLock(config.home() / "queue" / "_apply.lock"):
+                return fn(*a, **kw)
+        except LockBusy as e:
+            raise ApplyBusy(str(e)) from e
+    return wrapper
 
 
 def repo() -> Path:
@@ -230,6 +255,7 @@ def _cleanup(start_ref, branch, *, discard_uncommitted):
     return problems
 
 
+@_locked
 def apply(pid, *, run_checks=True):
     doc, state = load(pid)
     if state.get("state") != "proposed":
@@ -276,23 +302,29 @@ def apply(pid, *, run_checks=True):
     except BaseException as e:                                  # includes KeyboardInterrupt
         problems = _cleanup(start_ref, branch, discard_uncommitted=True)   # this attempt's own edit: safe to discard
         _state(pid, "cleanup_failed" if problems else ("interrupted" if not isinstance(e, Exception) else "failed_checks"),
-               error=str(e)[:300], cleanup_problems=problems)
+               error=str(e)[:300], cleanup_problems=problems, safe_to_discard=True)
         raise
     return _state(pid, "applied_pending_eval", branch=branch, base_sha=base_sha, head_sha=head_sha, start_ref=start_ref)
 
 
+@_locked
 def recover(pid):
     """After an interrupted or half-cleaned apply, or a gate revert that could not clean up: return to the
     start ref, delete the branch, make the proposal 'proposed' again."""
     doc, state = load(pid)
     if state.get("state") not in ("applying", "interrupted", "cleanup_failed", "failed_checks", "revert_failed"):
         raise ValueError(f"{pid} is '{state.get('state')}': nothing to recover")
-    # revert_failed came from gate(), where uncommitted work on the branch may be the user's own, not this
-    # attempt's: stay conservative there, same as gate() itself. Every other state is an apply() failure.
-    discard = state.get("state") != "revert_failed"
+    # Review (fourth round): a failed recover() itself transitions to "cleanup_failed" regardless of WHERE
+    # the failure originated, so re-deriving "safe to discard" from the CURRENT state name breaks on a
+    # second recovery attempt - a gate()-originated "revert_failed" that recover() could not clean up
+    # becomes "cleanup_failed", which this same logic used to treat as an apply()-failure (safe to discard),
+    # silently promoting a conservative case to a destructive one. `safe_to_discard` is set ONCE, at the
+    # point the failure first happened (apply()'s except block or gate()'s revert path), and _state()
+    # merges into the existing file, so it survives every later state transition unless explicitly changed.
+    discard = state.get("safe_to_discard", state.get("state") != "revert_failed")
     problems = _cleanup(state["start_ref"], state["branch"], discard_uncommitted=discard)
     if problems:
-        return _state(pid, "cleanup_failed", cleanup_problems=problems)
+        return _state(pid, "cleanup_failed", cleanup_problems=problems, safe_to_discard=discard)
     return _state(pid, "proposed", cleanup_problems=[], error=None)
 
 
@@ -343,6 +375,7 @@ def run_errors(run: dict, name: str) -> list:
     return errs
 
 
+@_locked
 def gate(pid, before_path, after_path, *, max_token_growth_pct=25):
     """Keep the branch only if the two runs are valid and paired AND nothing regressed. Otherwise delete the branch."""
     doc, state = load(pid)
@@ -373,7 +406,7 @@ def gate(pid, before_path, after_path, *, max_token_growth_pct=25):
     if reasons:
         problems = _cleanup(state.get("start_ref") or "main", branch, discard_uncommitted=False)   # may be on `branch`; never assume uncommitted work there is ours to discard
         if problems:
-            _state(pid, "revert_failed", reasons=reasons, comparison=cmp, cleanup_problems=problems)
+            _state(pid, "revert_failed", reasons=reasons, comparison=cmp, cleanup_problems=problems, safe_to_discard=False)
             raise RuntimeError("could not delete the branch: " + "; ".join(problems))
         return _state(pid, "reverted", reasons=reasons, comparison=cmp, gate_rejected_input=None)
     return _state(pid, "kept", comparison=cmp, gate_rejected_input=None, note="branch kept; open a PR and merge it yourself")

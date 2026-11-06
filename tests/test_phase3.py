@@ -196,6 +196,37 @@ class OrchestratorTests(TmpHome):
         self.assertEqual(d2["branch"], "agentsys/t1")
         self.assertEqual(git(repo, "show", "agentsys/t1:app.py").stdout, "print('updated')\n")   # actually redelivered
 
+    def test_a_branch_modified_in_the_target_repo_is_never_silently_treated_as_ours(self):
+        """Review (fourth round): the journal proves we CREATED this branch, not that its CURRENT content
+        is still what we last left it at. Without checking the branch's own sha, an unchanged workspace
+        (same ws_sha) would make a user-modified branch look like a still-valid delivery, and a changed
+        workspace would make deliver() delete that same branch - discarding the user's own added commit -
+        since 'ours' alone was treated as 'safe to replace'."""
+        repo = self.home / "target"; repo.mkdir()
+        git(repo, "init", "-q", "-b", "main"); (repo / "README").write_text("x"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
+        orchestrator.submit("t1", requirements=REQ, target_repo=repo)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        orchestrator.deliver("t1", repo)
+        # the user adds their own commit directly onto the delivered branch in the target repo
+        git(repo, "checkout", "-q", "agentsys/t1")
+        (repo / "mine.py").write_text("print('added after delivery')\n"); git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "my own addition")
+        git(repo, "checkout", "-q", "main")
+        # same workspace content (ws_sha unchanged): must NOT silently report "already delivered" success
+        with self.assertRaises(RuntimeError) as cm:
+            orchestrator.deliver("t1", repo)
+        self.assertIn("has changed since this task last delivered to it", str(cm.exception))
+        self.assertEqual(git(repo, "show", "agentsys/t1:mine.py").stdout, "print('added after delivery')\n")  # untouched
+        # a NEW workspace commit (so a real redelivery would otherwise be attempted): still must not delete it
+        ws = self.ws("t1")
+        (ws / "app.py").write_text("print('updated')\n"); loop._git(ws, "add", "-A"); loop._git(ws, "commit", "-q", "-m", "W2: update")
+        with self.assertRaises(RuntimeError) as cm2:
+            orchestrator.deliver("t1", repo)
+        self.assertIn("has changed since this task last delivered to it", str(cm2.exception))
+        self.assertIn("agentsys/t1", git(repo, "branch").stdout)
+        self.assertEqual(git(repo, "show", "agentsys/t1:mine.py").stdout, "print('added after delivery')\n")  # still there
+
     def test_recovery_after_a_crash_mid_delivery_uses_the_journaled_original_branch(self):
         """Review (third round): if the process crashed right after `checkout -b branch` succeeded (so
         current HEAD IS `branch` itself), a fresh `rev-parse --abbrev-ref HEAD` on retry would adopt the
@@ -216,6 +247,31 @@ class OrchestratorTests(TmpHome):
         self.assertEqual(e["status"], "done")
         self.assertEqual(git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "agentsys/t1")  # delivered, left on the branch
         self.assertEqual(git(repo, "show", "agentsys/t1:app.py").stdout, "print('hi')\n")
+
+    def test_stop_prevents_delivery_even_with_no_agent_call_left_to_make(self):
+        """Review (fourth round): control.read() was checked only inside loop.py's agent() - a task sitting
+        at an already-approved merge gate has nothing left for the build loop to do, so "stop" was never
+        seen at all, and delivery ran to completion as if nothing had been requested."""
+        orchestrator.submit("t1", requirements=REQ)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        control.set_control("t1", "stop")
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "stopped")
+        self.assertFalse((self.home / "deliveries/t1").exists())
+        self.assertEqual(orchestrator.load_entry("t1")["status"], "stopped")
+        control.set_control("t1", "resume")
+        e2 = proc("t1", f)
+        self.assertEqual(e2["status"], "done")
+        self.assertTrue((self.home / "deliveries/t1").exists())
+
+    def test_stop_before_intake_prevents_a_real_call(self):
+        orchestrator.submit("t1", request_text="make a word counter")
+        control.set_control("t1", "stop")
+        f = fb()
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "stopped"); self.assertEqual(f.calls, [])
 
     def test_deliver_is_idempotent_after_a_crash_between_delivery_and_done(self):
         repo = self.home / "target"; repo.mkdir()
@@ -380,6 +436,35 @@ class DashboardActionTests(TmpHome):
         self.assertTrue(any(i["task_id"] == "t2" and i["level"] == "bad" for i in dd.alerts_view()["items"]))
 
 
+class DashboardServerHeaderTests(TmpHome):
+    """Review (fourth round): server.py sent no frame-ancestors/X-Frame-Options, so the dashboard (which
+    performs approval actions) could be embedded in an attacker's iframe for a clickjacking attack."""
+
+    def test_every_response_blocks_being_framed(self):
+        import http.client
+        from http.server import ThreadingHTTPServer
+        from threading import Thread
+        from dashboard import server as dashboard_server
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), dashboard_server.H)
+        t = Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+            try:
+                conn.request("GET", "/api/overview")
+                resp = conn.getresponse()
+                resp.read()
+                self.assertEqual(resp.getheader("X-Frame-Options"), "DENY")
+                self.assertIn("frame-ancestors 'none'", resp.getheader("Content-Security-Policy") or "")
+            finally:
+                conn.close()
+        finally:
+            srv.shutdown()
+            t.join(timeout=5)
+            srv.server_close()
+
+
 class LockTests(TmpHome):
     def test_second_run_on_the_same_task_is_refused(self):
         orchestrator.submit("t1", requirements=REQ)
@@ -389,20 +474,58 @@ class LockTests(TmpHome):
                 proc("t1", f)
             out = scheduler.run_next(backend=f, env={}, settings_paths=[])
             self.assertIn("another run", out["skipped"]); self.assertEqual(f.calls, [])
-        self.assertFalse((self.home / "queue/t1.lock").exists())             # released
+        with orchestrator._Lock("t1"):          # released: a fresh acquire succeeds right away
+            pass
 
-    def test_lock_is_released_after_an_error_and_stale_locks_are_taken_over(self):
-        import os
+    def test_lock_is_released_after_an_error(self):
         orchestrator.submit("t1", requirements=REQ)
         with self.assertRaises(RuntimeError):
             with orchestrator._Lock("t1"):
                 raise RuntimeError("boom")
-        self.assertFalse((self.home / "queue/t1.lock").exists())
-        lock = self.home / "queue/t1.lock"; lock.write_text("999999")
-        old = time.time() - orchestrator.LOCK_STALE_S - 10
-        os.utime(lock, (old, old))
+        with orchestrator._Lock("t1"):          # released even though the block raised
+            pass
+
+    def test_a_stale_looking_lock_file_with_no_real_holder_is_not_a_blocker(self):
+        """Review (fourth round): the previous scheme decided staleness from the lock file's mtime, with a
+        real race between that check and the unlink. An OS-level lock needs no staleness heuristic at all -
+        a lock file nobody is actually holding (e.g. left over from a process that died, or even a bare file
+        with old content and an old mtime that nothing ever flocked) can always be acquired immediately."""
+        import os, time
+        lock = self.home / "queue/t1.lock"; lock.parent.mkdir(parents=True); lock.write_text("999999")
+        os.utime(lock, (time.time() - 999_999, time.time() - 999_999))
         with orchestrator._Lock("t1"):
             pass
+
+    def test_a_real_lock_holder_is_not_bypassed_by_an_old_mtime(self):
+        """The flip side of the above: an OS lock held by a LIVE process must still block, no matter how old
+        the lock file's mtime looks - mtime must never be able to bypass a genuinely-held lock."""
+        import os, time
+        with orchestrator._Lock("t1"):
+            lock = self.home / "queue/t1.lock"
+            os.utime(lock, (time.time() - 999_999, time.time() - 999_999))
+            with self.assertRaises(orchestrator.TaskBusy):
+                with orchestrator._Lock("t1"):
+                    pass
+
+    def test_concurrent_threads_racing_for_the_lock_never_both_win(self):
+        """Review (fourth round) reproduced the old lock's double-acquisition race with two threads. Run the
+        same shape of race against the fixed lock and confirm it genuinely holds under real concurrency,
+        not just in sequential before/after checks."""
+        import threading
+        results = []
+        barrier = threading.Barrier(2)
+        def worker(name):
+            barrier.wait()          # both threads hit _Lock.__enter__ as close together as possible
+            try:
+                with orchestrator._Lock("t1"):
+                    results.append((name, "acquired"))
+                    import time as _t; _t.sleep(0.05)
+            except orchestrator.TaskBusy:
+                results.append((name, "busy"))
+        threads = [threading.Thread(target=worker, args=(n,)) for n in ("A", "B")]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        self.assertEqual(sorted(r[1] for r in results), ["acquired", "busy"])   # exactly one of each, never both "acquired"
 
     def test_simultaneous_decisions_only_one_wins(self):
         a = approvals.request("t1", "merge", "c")
