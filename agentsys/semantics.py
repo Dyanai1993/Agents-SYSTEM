@@ -116,7 +116,11 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         if c["result"] == "skipped":
             continue
         cmd = norm(c["command"])
-        by_command = bool(cmd) and any(cmd in r or (r and r in cmd) for r in ran)
+        # Only "claimed command is a substring of something really logged" counts. The reverse ("logged
+        # command is a substring of the claim") is unsound: any real but trivial logged command (e.g. an
+        # earlier `echo setup`) would then back ANY longer fabricated claim that happens to contain it
+        # verbatim, such as `echo setup && python -m unittest` when only `echo setup` was ever run.
+        by_command = bool(cmd) and any(cmd in r for r in ran)
         if by_command or _evidence_in_output(c["evidence"], outputs):
             continue
         shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"

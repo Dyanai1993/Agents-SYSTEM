@@ -145,6 +145,38 @@ class OrchestratorTests(TmpHome):
         e = proc("t1", f)
         self.assertEqual(e["status"], "blocked"); self.assertIn("not a git repository", e["note"])
 
+    def test_deliver_is_idempotent_after_a_crash_between_delivery_and_done(self):
+        repo = self.home / "target"; repo.mkdir()
+        git(repo, "init", "-q", "-b", "main"); (repo / "README").write_text("x"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
+        orchestrator.submit("t1", requirements=REQ, target_repo=repo)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        d1 = orchestrator.deliver("t1", repo)
+        self.assertEqual(d1["branch"], "agentsys/t1")
+        # as if _process crashed right after deliver() returned, before recording "done": deliver() runs again
+        d2 = orchestrator.deliver("t1", repo)
+        self.assertEqual(d2["branch"], "agentsys/t1")
+        self.assertEqual(git(repo, "branch").stdout.count("agentsys/t1"), 1)
+
+    def test_failed_patch_apply_restores_the_original_branch_and_deletes_the_broken_one(self):
+        repo = self.home / "target"; repo.mkdir()
+        git(repo, "init", "-q", "-b", "main"); (repo / "app.py").write_text("conflict\n"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
+        orchestrator.submit("t1", requirements=REQ, target_repo=repo)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "blocked"); self.assertIn("do not apply cleanly", e["note"])
+        self.assertEqual(git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        self.assertNotIn("agentsys/t1", git(repo, "branch").stdout)
+        # fix the conflict in the target repo and retry: the stale broken branch must not block this
+        (repo / "app.py").unlink(); git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "remove conflict")
+        orchestrator.retry("t1")
+        e2 = proc("t1", f)
+        self.assertEqual(e2["status"], "done")
+        self.assertIn("agentsys/t1", git(repo, "branch").stdout)
+
     def test_rejected_merge(self):
         orchestrator.submit("t1", requirements=REQ)
         f = fb(); proc("t1", f)

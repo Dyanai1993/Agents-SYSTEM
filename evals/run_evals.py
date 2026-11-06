@@ -60,14 +60,25 @@ def run_real(backend, label, only=None, home=None, token_budget=None, resume_dir
     if token_budget is not None and token_budget <= 0:
         raise ValueError("token_budget must be positive")
     run_id = f"{label}-{int(time.time())}"
+    sha, branch, dirty = _git_state()
     if resume_dir:                              # resuming is explicit; a repeated label never silently reuses an old run
         home = Path(resume_dir)
-        run_id = json.loads((home / "run.json").read_text())["run_id"] if (home / "run.json").exists() else run_id
+        manifest_path = home / "run.json"
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+        run_id = manifest.get("run_id", run_id)
+        # The manifest is the ONLY source of truth for what commit this run started on. A run resumed on a
+        # different commit (e.g. after checking out a lesson-proposal branch) would silently reuse old,
+        # already-measured checkpoints and tag them with the new commit's sha - the "after" run would then
+        # look genuinely measured on the branch to the eval gate, when it was not re-run at all.
+        if manifest.get("git_sha") and manifest["git_sha"] != sha:
+            raise ValueError(f"--resume {resume_dir} was started on {manifest['git_sha'][:8]}, but the current "
+                              f"checkout is on {sha[:8]}: check out the original commit before resuming, or start a new run")
     else:
         home = Path(home or HERE / "runs" / run_id)
     home.mkdir(parents=True, exist_ok=True)
-    (home / "run.json").write_text(json.dumps({"run_id": run_id, "label": label}))
-    sha, branch, dirty = _git_state()
+    manifest_path = home / "run.json"
+    if not manifest_path.exists():               # immutable once written: a resume never overwrites the original commit
+        manifest_path.write_text(json.dumps({"run_id": run_id, "label": label, "git_sha": sha, "git_branch": branch}))
     (HERE / "results").mkdir(exist_ok=True)
     path = HERE / "results" / f"real-{run_id}.json"
     old_home = os.environ.get("AGENTSYS_HOME")

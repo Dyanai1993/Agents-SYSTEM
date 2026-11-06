@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 from . import approvals, config, intake, logger, loop, memory, schema, tasks
+from .ledger import BudgetExceeded, Ledger
 
 RESET_GUESS_S = 5 * 3600     # (assumption) when a usage limit hits, retry after this long
 LOCK_STALE_S = 2 * 3600      # a lock older than this belongs to a dead run
@@ -129,8 +130,29 @@ def _base(ws):
     return loop._git(ws, "rev-list", "--max-parents=0", "HEAD").stdout.split()[0]
 
 
+def _merge_diff_ref(task_id, tdir):
+    """Identifies exactly what a merge approval covers: the workspace commit AND the requirement version it
+    was built against. Either changing (e.g. `orch.py retry --answer` adding a constraint, which forces a new
+    final regression and possibly new commits) must force a fresh human approval instead of reusing an old
+    'approved' decision made for different content."""
+    ws = tdir / "workspace"
+    ws_sha = loop._git(ws, "rev-parse", "HEAD").stdout.strip()
+    prog_path = tdir / "progress.json"
+    req_hash = json.loads(prog_path.read_text(encoding="utf-8")).get("req_hash") if prog_path.exists() else None
+    return f"git:{ws_sha}:req:{req_hash}"
+
+
+def _delivery_journal(tdir):
+    return tdir / "delivery.json"
+
+
 def deliver(task_id, target_repo=None):
-    """Export the workspace history as patches; optionally apply them on a NEW branch of a target repo."""
+    """Export the workspace history as patches; optionally apply them on a NEW branch of a target repo.
+
+    Idempotent and self-cleaning: a crash or process failure (ours or git's) must never leave the target
+    repo checked out on a half-finished branch that blocks every later retry, and re-running after a
+    successful delivery must not try to recreate the branch and fail.
+    """
     tdir = config.home() / "tasks" / task_id
     ws = tdir / "workspace"
     out = config.home() / "deliveries" / task_id
@@ -140,6 +162,8 @@ def deliver(task_id, target_repo=None):
     if r.returncode or not patches:
         raise RuntimeError(f"nothing to deliver: {r.stderr.strip() or 'no commits'}")
     result = {"patches_dir": str(out), "patches": patches, "branch": None}
+    jpath = _delivery_journal(tdir)
+    journal = json.loads(jpath.read_text(encoding="utf-8")) if jpath.exists() else None
     if target_repo:
         repo = Path(target_repo)
         if not repo.is_dir():
@@ -147,16 +171,33 @@ def deliver(task_id, target_repo=None):
         if loop._git(repo, "rev-parse", "--is-inside-work-tree").returncode:
             raise RuntimeError(f"target repo {repo} is not a git repository")
         branch = f"agentsys/{task_id}"
+        if journal and journal.get("target_repo") == str(repo) and journal.get("branch") == branch and journal.get("state") == "delivered":
+            result["branch"] = branch           # already delivered here before (e.g. a crash after success): nothing more to do
+            return result
+        orig_branch = loop._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "HEAD"
+        if _branch_exists_in(repo, branch):
+            # Leftover from an earlier attempt that failed before cleaning up (git am failed, or a crash).
+            # It was never recorded as 'delivered', so it is ours to remove before trying again.
+            loop._git(repo, "checkout", "-q", orig_branch)
+            loop._git(repo, "branch", "-D", branch)
         if loop._git(repo, "status", "--porcelain").stdout.strip():
             raise RuntimeError(f"target repo {repo} has uncommitted changes: not touching it")
+        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "state": "creating"}), encoding="utf-8")
         if loop._git(repo, "checkout", "-q", "-b", branch).returncode:
             raise RuntimeError(f"cannot create branch {branch} in {repo}")
         am = loop._git(repo, "am", "-q", *[str(out / p) for p in patches])
         if am.returncode:
             loop._git(repo, "am", "--abort")
+            loop._git(repo, "checkout", "-q", orig_branch)      # leave the target repo where it was, not on the broken branch
+            loop._git(repo, "branch", "-D", branch)
             raise RuntimeError(f"patches do not apply cleanly on {repo}: {am.stderr.strip()[:200]}")
+        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "state": "delivered"}), encoding="utf-8")
         result["branch"] = branch
     return result
+
+
+def _branch_exists_in(repo, branch):
+    return loop._git(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode == 0
 
 
 def process(task_id, *, backend, env=None, settings_paths=None):
@@ -184,7 +225,12 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
     if req is None and (tdir / "requirements.json").exists():
         req = json.loads((tdir / "requirements.json").read_text(encoding="utf-8"))
     if req is None:
-        req, err = intake.run_intake(task_id, entry["request_text"], backend=backend, **kw)
+        Ledger(task_id).begin_run()       # a retried intake attempt gets its own fresh run clock, like the build loop
+        try:
+            req, err = intake.run_intake(task_id, entry["request_text"], backend=backend, **kw)
+        except BudgetExceeded as e:
+            tasks.set_state(task_id, "blocked", title=entry["title"])
+            return finish("blocked", f"Limit hit during intake: {e.reason}. I stopped and need your decision.")
         if err:
             tasks.set_state(task_id, "blocked", title=entry["title"])
             return finish("blocked", f"intake failed: {err}")
@@ -205,7 +251,7 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
         return finish(res["status"], res["message"])
 
     # ---- merge gate
-    ap = approvals.request(task_id, "merge", _merge_context(task_id, tdir))
+    ap = approvals.request(task_id, "merge", _merge_context(task_id, tdir), diff_ref=_merge_diff_ref(task_id, tdir))
     st = approvals.status(ap["id"])
     if st == "pending":
         tasks.set_state(task_id, "review", title=entry["title"], waiting_approval=True)

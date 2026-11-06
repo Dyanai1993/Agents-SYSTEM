@@ -75,12 +75,20 @@ def content_hash(doc) -> str:
 
 
 def _section_of(text, old):
+    """Name of the section containing the WHOLE span of `old`, or None if it crosses into the next
+    section. Checking only where `old` starts let a replacement begin at the end of 'Rules' and run on
+    into 'Safety': the start looked like Rules, but the match (and whatever it replaces) was not."""
     i = text.find(old)
+    if i == -1:
+        return ""
+    end = i + len(old)
     heads = [(m.start(), m.group(1)) for m in re.finditer(r"^## (.+)$", text, re.M)]
     name = ""
     for pos, h in heads:
         if pos <= i:
             name = h
+        elif pos < end:
+            return None
     return name
 
 
@@ -101,8 +109,12 @@ def proposal_errors(p, lesson_ids) -> list:
             text = path.read_text(encoding="utf-8")
             if text.count(old) != 1:
                 errs.append("old_text must occur exactly once in the target")
-            elif p["target"].startswith(".claude/agents/") and not _section_of(text, old).startswith("Rules"):
-                errs.append(f"only the 'Rules' section of a prompt may change (old_text is in '{_section_of(text, old) or 'the header'}')")
+            elif p["target"].startswith(".claude/agents/"):
+                sec = _section_of(text, old)
+                if sec is None:
+                    errs.append("old_text crosses from one section into the next: it must stay inside a single section")
+                elif not sec.startswith("Rules"):
+                    errs.append(f"only the 'Rules' section of a prompt may change (old_text is in '{sec or 'the header'}')")
             if len(MARKERS.findall(new)) < len(MARKERS.findall(old)):
                 errs.append("change removes a never/do-not/only rule")
     elif p["target"].startswith(".claude/agents/"):
@@ -182,11 +194,25 @@ def _current_ref():
 
 
 def _cleanup(start_ref, branch):
-    """Best effort, but REPORTED: returns a list of problems. Never claims success silently."""
+    """Best effort, but REPORTED: returns a list of problems. Never claims success silently.
+
+    Only touches the working tree when we are actually still ON `branch` (an apply() attempt failed mid-way).
+    `checkout -- .` restores files from the INDEX, not HEAD: if this attempt already `git add`ed its edit
+    before failing, the index already holds that edit, so `checkout -- .` was a no-op that left it staged -
+    and then checking out start_ref carried the staged edit onto it. `reset --hard HEAD` discards it instead,
+    since HEAD on `branch` is still identical to start_ref at this point (nothing was committed yet).
+    When gate() calls this to revert a kept branch, we are already back on start_ref (apply() put us there
+    on success) - there is nothing of this attempt's left in the working tree, so nothing is reset here:
+    doing so anyway would discard whatever the user is unrelatedly working on in their own checkout."""
     problems = []
-    for args in (("checkout", "-q", "--", "."), ("clean", "-fdq", "--", "memory/patterns"), ("checkout", "-q", start_ref)):
-        r = _git(*args)
-        if r.returncode and args[0] == "checkout" and "--" not in args:
+    current = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    if current == branch:
+        r = _git("reset", "--hard", "HEAD")
+        if r.returncode:
+            problems.append(f"could not discard changes on {branch}: {r.stderr.strip()[:120]}")
+        _git("clean", "-fdq", "--", "memory/patterns")
+        r = _git("checkout", "-q", start_ref)
+        if r.returncode:
             problems.append(f"could not return to {start_ref}: {r.stderr.strip()[:120]}")
     if _branch_exists(branch):
         _git("branch", "-D", branch)
@@ -213,6 +239,10 @@ def apply(pid, *, run_checks=True):
     start_ref = _current_ref()
     base_sha = _must("rev-parse", "HEAD")
     branch = f"agentsys/lesson-{pid}"
+    if _branch_exists(branch):
+        # Never ours to delete: _cleanup() deletes `branch` unconditionally on any failure, which used to
+        # destroy a same-named branch this attempt did not create (nothing journaled yet - raise before that).
+        raise RuntimeError(f"branch {branch} already exists: not touching it. Delete it yourself first if it is stale.")
     _state(pid, "applying", start_ref=start_ref, branch=branch, base_sha=base_sha)      # journal first: recover() uses it after a crash
     try:
         _must("checkout", "-q", "-b", branch)
@@ -288,10 +318,15 @@ def run_errors(run: dict, name: str) -> list:
     for k in ("run_id", "git_sha", "label"):
         if not run.get(k):
             errs.append(f"{name}: missing {k}")
-    if run.get("git_dirty"):
+    # Review: omitting "complete" or "git_dirty" entirely used to pass silently - `.get("complete") is False`
+    # and `.get("git_dirty")` are both falsy for an ABSENT key too, so a hand-edited (or truncated) run file
+    # with neither key looked like a clean, finished run. Both must be explicitly present.
+    if "git_dirty" not in run:
+        errs.append(f"{name}: missing git_dirty")
+    elif run.get("git_dirty"):
         errs.append(f"{name}: the working tree was dirty when the run started")
-    if run.get("complete") is False:
-        errs.append(f"{name}: the run did not finish")
+    if run.get("complete") is not True:
+        errs.append(f"{name}: the run is not recorded as complete")
     return errs
 
 

@@ -35,6 +35,23 @@ class LoopTests(TmpHome):
         self.assertEqual(len(dev_calls), 2)
         self.assertIn("AssertionError", dev_calls[1]["prompt"])
         self.assertEqual(ledger.Ledger("t1").data["fix_loops"], 1)
+        # Review: record_fix_loop() used to run on a Ledger snapshotted before the loop started, so saving it
+        # overwrote the calls/tokens runner.run_agent had recorded in between. Every real call must be counted.
+        self.assertEqual(ledger.Ledger("t1").data["calls"], len(fb.calls))
+
+    def test_requirement_change_after_final_done_forces_a_fresh_final_regression(self):
+        """Review: `orch.py retry --answer` adds a constraint after final_done was already True (e.g. a
+        delivery failure unrelated to the requirement). Without this, the new constraint is never checked:
+        the next run makes zero calls and goes straight back to ready_for_review."""
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass})
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "ready_for_review")
+        fb2 = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass})
+        req2 = dict(REQ, constraints=REQ["constraints"] + ["Clarification from the user: use argparse"])
+        r2 = go("t1", fb2, req=req2)
+        self.assertEqual(r2["status"], "ready_for_review")
+        self.assertEqual(roles(fb2), ["tester"])          # only a fresh FINAL regression; no work item rebuilt
+        self.assertEqual(json.loads(fb2.calls[-1]["prompt"])["work_item"]["id"], "FINAL")
 
     def test_fix_cap_stops_and_asks(self):
         fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_fail})
@@ -50,6 +67,8 @@ class LoopTests(TmpHome):
         self.assertEqual(r["status"], "blocked"); self.assertIn("re-plan cap", r["message"])
         self.assertEqual(roles(fb).count("architect"), 3)
         self.assertTrue((self.home / "tasks/t1/plan-v2.json").exists())
+        # Review: record_replan() had the same stale-Ledger bug as record_fix_loop().
+        self.assertEqual(ledger.Ledger("t1").data["calls"], len(fb.calls))
 
     def test_replan_gets_full_context_and_keeps_completed_items(self):
         fb = runner.FakeBackend({"architect": [plan(2), plan(2)], "developer": DEV, "tester": [t_pass, t_design, t_pass, t_pass, t_pass]})

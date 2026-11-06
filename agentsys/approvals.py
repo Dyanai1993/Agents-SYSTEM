@@ -54,10 +54,14 @@ def latest(task_id, gate):
 
 
 def request(task_id, gate, context, diff_ref=None, new=False):
-    """Create a request, or return the latest one. A rejected request is replaced only when new=True."""
+    """Create a request, or return the latest one. A rejected request is replaced only when new=True.
+    A latest request whose diff_ref no longer matches the one given here is treated as stale and replaced
+    regardless of `new` or its decision - even an 'approved' one: it was approved for different content
+    (e.g. a different workspace commit or requirement version), so it cannot stand in for this one."""
     logger.safe_task_id(task_id)
     doc, st = latest(task_id, gate)
-    if doc and (st in ("pending", "approved") or not new):
+    stale = diff_ref is not None and doc is not None and doc.get("diff_ref") != diff_ref
+    if doc and not stale and (st in ("pending", "approved") or not new):
         return doc
     n = len(_requests_for(task_id, gate)) + 1
     doc = {"id": f"{task_id}-{gate}-{n}", "task_id": task_id, "gate": gate, "context": context[:4000],

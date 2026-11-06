@@ -114,6 +114,28 @@ class RetryTests(TmpHome):
         orchestrator.retry("t1")
         self.assertEqual(scheduler.pick()["task_id"], "t1")           # after the human says retry, the scheduler runs it
 
+    def test_retry_with_an_answer_after_approval_requires_a_fresh_approval(self):
+        """Review: a delivery failure unrelated to the requirement (bad target_repo) left the task 'blocked'
+        with an existing 'approved' decision. Answering and retrying must not silently reuse that approval
+        for content it never saw - it must re-verify and ask again."""
+        def dev(prompt):
+            (self.home / "tasks/t1/workspace/app.py").write_text("print('hi')\n")
+            return DEV
+        orchestrator.submit("t1", requirements=REQ, target_repo=self.home / "does-not-exist")
+        f = fb(developer=dev)
+        self.assertEqual(proc("t1", f)["status"], "waiting_approval")
+        first_approval = approvals.pending()[0]["id"]
+        approvals.decide(first_approval, "approved")
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "blocked"); self.assertIn("does not exist", e["note"])
+        orchestrator.retry("t1", answer="use argparse")
+        f2 = fb()
+        e2 = proc("t1", f2)
+        self.assertEqual(e2["status"], "waiting_approval")           # not reusing the old approval
+        second_approval = e2["note"].split()[-1]
+        self.assertNotEqual(second_approval, first_approval)
+        self.assertIn("tester", [c["role"] for c in f2.calls])       # the final regression actually ran again
+
     def test_a_vague_answer_is_still_validated(self):
         orchestrator.submit("t1", request_text="x")
         proc("t1", fb(orchestrator={"nope": 1}))                      # intake failed: no structured requirement exists

@@ -126,9 +126,14 @@ def protect_config(ws, task_id, who):
     if bad:
         for f in bad:
             path = ws / f
-            tracked = _git(ws, "ls-files", "--error-unmatch", f).returncode == 0
-            if tracked:
-                _git(ws, "checkout", "--", f)
+            # `git ls-files` lists INDEX entries, not HEAD: a file the agent just `git add`ed is "tracked" by
+            # that check, and `checkout -- f` would only restore it from the (still bad) index - a no-op that
+            # leaves it staged, so the next commit_changes() call commits it anyway. Unstage unconditionally,
+            # then restore from HEAD only if it safely existed there; otherwise delete it outright.
+            existed_at_head = _git(ws, "cat-file", "-e", f"HEAD:{f}").returncode == 0
+            _git(ws, "reset", "-q", "--", f)
+            if existed_at_head:
+                _git(ws, "checkout", "-q", "HEAD", "--", f)
             elif path.is_dir():
                 import shutil
                 shutil.rmtree(path, ignore_errors=True)
@@ -155,7 +160,7 @@ def _load_progress(tdir):
     if p.exists():
         return json.loads(p.read_text(encoding="utf-8"))
     return {"plan_done": False, "item": 0, "step": "dev", "fix": 0, "last_report": None, "runs": 0, "replans": 0,
-            "reports": 0, "completed": {}, "final_done": False, "last_files": []}
+            "reports": 0, "completed": {}, "final_done": False, "last_files": [], "req_hash": None}
 
 
 def _ids(req):
@@ -229,6 +234,13 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         raise NeedsInput("Blocking unknowns in the requirement: " + " | ".join(blocking))
     ws = ensure_workspace(tdir, seed)
     prog = _load_progress(tdir)
+    req_hash = hashlib.sha256(json.dumps(req, sort_keys=True).encode()).hexdigest()[:16]
+    if prog.get("req_hash") != req_hash:
+        # The requirement changed since the last run that reached this point (e.g. `orch.py retry --answer`
+        # added a constraint after the final regression had already passed). Completed work items were never
+        # checked against the new requirement, so the final regression must run again before review.
+        prog["final_done"] = False
+        prog["req_hash"] = req_hash
     save = lambda: _save(tdir / "progress.json", prog)
     _save(tdir / "requirements.json", req)
     req_view = {"goal": req["goal"], "risks": req["risks"],
@@ -318,7 +330,9 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         return rep
 
     # ---- build / test / fix, one work item at a time
-    ledger = Ledger(task_id)
+    # No long-lived Ledger here: a fresh instance is constructed right before each record_*() call below, so
+    # it always loads the current on-disk budget.json. A Ledger held across agent() calls would snapshot
+    # calls/tokens at creation time and overwrite the ones runner.run_agent recorded in between on .save().
     while True:
         todo = [i for i, w in enumerate(plan["work_items"]) if prog["completed"].get(w["id"]) != _item_hash(w)]
         if not todo:
@@ -357,7 +371,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
             elif rep["verdict"] == "blocked":
                 raise NeedsInput(f"tester could not verify {wi['id']}: {rep['summary']}")
             elif rep["design_problem"]:
-                ledger.record_replan()      # raises BudgetExceeded at the cap
+                Ledger(task_id).record_replan()      # raises BudgetExceeded at the cap
                 prog["replans"] += 1
                 tasks.set_state(task_id, "plan", title=title, current_agent="architect")
                 accept_plan(agent("architect", {"mode": "replan", "requirements": req_view, "current_plan": plan,
@@ -366,7 +380,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
                 plan = json.loads((tdir / "plan.json").read_text(encoding="utf-8"))
                 prog.update(step="dev", fix=0, last_report=None)
             else:
-                ledger.record_fix_loop()    # raises BudgetExceeded at the cap
+                Ledger(task_id).record_fix_loop()    # raises BudgetExceeded at the cap
                 prog.update(fix=prog["fix"] + 1, step="dev", last_report=rep)
             save()
 

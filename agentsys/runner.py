@@ -110,13 +110,20 @@ class FakeBackend:
 
 def _kill_tree(p):
     """Kill the process AND its children. On Windows `claude` may be a .cmd shim: killing only the shim leaves the real
-    process holding our pipe open until it finishes. On POSIX the process runs in its own group."""
+    process holding our pipe open until it finishes. On POSIX the process runs in its own group.
+
+    Started with start_new_session=True, so p.pid IS the process group id by construction - pass it to killpg
+    directly instead of looking it up with os.getpgid(p.pid) first. That lookup needs p itself to still be a
+    resolvable process; if p already exited (e.g. it crashed right after forking a child that inherited our
+    stdout pipe and kept running), getpgid fails and nothing is signalled, so the orphaned child keeps the
+    pipe open and our read loop blocks forever. killpg on the numeric group id works even once p is gone, as
+    long as any member of that group (the orphan) is still alive."""
     import signal
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
         else:
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            os.killpg(p.pid, signal.SIGKILL)
     except (OSError, ProcessLookupError):
         pass
     try:
@@ -181,8 +188,14 @@ class CliBackend:
                         _kill_tree(p)                   # stop before the agent does any work
                         raise billing_guard.BillingGuardError(problems)
                 elif msg.get("type") == "result":
+                    if init is None:          # stream completed (or skipped straight to a result) without ever
+                        _kill_tree(p)          # proving the credential source: fail closed, same as a bad init
+                        raise billing_guard.BillingGuardError(["no init message received before the result: cannot prove the credential source"])
                     result = msg
                 elif msg.get("type") in ("assistant", "user"):
+                    if init is None:          # real agent output arrived before any init message: the process did
+                        _kill_tree(p)          # work with an unverified credential source - stop it now, not after
+                        raise billing_guard.BillingGuardError(["no init message received before agent output: cannot prove the credential source"])
                     content = (msg.get("message") or {}).get("content")
                     for blk in content if isinstance(content, list) else []:
                         if not isinstance(blk, dict):
@@ -246,12 +259,25 @@ class SdkBackend:
                                           model=model, max_turns=limits.max_turns, cwd=str(cwd) if cwd else None,
                                           env=dict(env or {}))
             init, result = None, None
-            async for msg in sdk.query(prompt=prompt, options=opts):
-                name = type(msg).__name__
-                if name == "SystemMessage" and getattr(msg, "subtype", "") == "init":
-                    init = dict(getattr(msg, "data", {}) or {})
-                elif name == "ResultMessage":
-                    result = msg
+            agen = sdk.query(prompt=prompt, options=opts)
+            try:
+                async for msg in agen:
+                    name = type(msg).__name__
+                    if name == "SystemMessage" and getattr(msg, "subtype", "") == "init":
+                        init = dict(getattr(msg, "data", {}) or {})
+                        problems = billing_guard.check_init_message(init)
+                        if problems:
+                            raise billing_guard.BillingGuardError(problems)   # stop before the agent does any work
+                        continue
+                    if name in ("ResultMessage", "AssistantMessage", "UserMessage") and init is None:
+                        raise billing_guard.BillingGuardError(["no init message received before agent output: cannot prove the credential source"])
+                    if name == "ResultMessage":
+                        result = msg
+            finally:
+                try:
+                    await agen.aclose()
+                except Exception:
+                    pass          # never let cleanup hide the real error raised above
             return init, result
 
         t0 = time.time()
@@ -259,6 +285,8 @@ class SdkBackend:
             init, res = asyncio.run(asyncio.wait_for(go(), limits.timeout_s))
         except asyncio.TimeoutError:
             return AgentResult(role=role, ok=False, backend=self.name, error=f"timeout after {limits.timeout_s}s")
+        except billing_guard.BillingGuardError:
+            raise                    # never swallow this into a generic error string - the caller must see it
         except Exception as e:  # SDK raises process errors for limit hits
             if looks_like_limit(str(e)):
                 raise UsageLimitReached(str(e)[:300])

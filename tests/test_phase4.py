@@ -177,6 +177,11 @@ class ReviewTests(TmpHome):
             "api key wording": P(new_text="7. Last rule. ONLY this. Use the api key."),
             "removes a rule": P(old_text="7. Last rule. ONLY this.", new_text="7. Last rule."),
             "outside the Rules section": P(old_text="DATA stays. Never skip.", new_text="DATA stays. Never skip. Be nice."),
+            # Review finding 9: checking only where old_text STARTS let a replacement begin at the end of
+            # Rules and run on into Safety, deleting/rewriting Safety while still counting as "starts in Rules".
+            "old_text starts in Rules but crosses into Safety": P(
+                old_text="7. Last rule. ONLY this.\n## Safety\nDATA stays.",
+                new_text="7. Last rule. ONLY this and more.\n## Safety\nDATA remains."),
         }
         for name, prop in cases.items():
             with self.subTest(name):
@@ -284,6 +289,24 @@ class ReviewTests(TmpHome):
         self.assertIn("commit", str(cm.exception)); self.assertIn("failed", str(cm.exception))
         self.assertEqual(learning.load("P-1")[1]["state"], "failed_checks")
         self.assertNotIn("agentsys/lesson-P-1", self.branches())
+        # Review finding 1b: `git add` had already succeeded before `commit` failed, so the edit was staged.
+        # _cleanup()'s old `checkout -- .` only restores from the INDEX (which already held the edit), then
+        # `checkout start_ref` carried that staged edit onto main - still staged, never reverted.
+        self.assertEqual(gitc(self.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        self.assertFalse(gitc(self.repo, "status", "--porcelain").stdout.strip(), "main must be clean")
+        self.assertNotIn("Tick every id", (self.repo / ".claude/agents/tester.md").read_text())
+
+    def test_branch_name_collision_is_never_deleted_by_cleanup(self):
+        """Review finding 2: _cleanup() deleted `branch` whenever it existed, with no check that THIS
+        apply() attempt was the one that created it - including a pre-existing, unrelated branch of the
+        same name."""
+        gitc(self.repo, "branch", "agentsys/lesson-P-1")        # someone else's branch, same name apply() would use
+        self.run_review(self.proposals()); self.approve()
+        with self.assertRaises(RuntimeError) as cm:
+            learning.apply("P-1")
+        self.assertIn("already exists", str(cm.exception))
+        self.assertIn("agentsys/lesson-P-1", self.branches())   # still there: apply() never touched it
+        self.assertEqual(learning.load("P-1")[1]["state"], "proposed")   # never journaled as "applying"
 
     def test_interrupted_apply_is_cleaned_up_and_recoverable(self):
         """Review finding 11: a KeyboardInterrupt during the checks used to leave a branch and a half edit."""
@@ -370,6 +393,19 @@ class GateTests(ReviewTests):
         self.assertEqual(out["state"], "reverted"); self.assertIn("regressions", out["reasons"][0])
         self.assertNotIn("agentsys/lesson-P-1", self.branches())
 
+    def test_gate_revert_does_not_touch_unrelated_uncommitted_work_on_main(self):
+        """Review finding 1a: apply() already returned to main before gate() runs (it can run much later,
+        after a real before/after eval). _cleanup()'s `checkout -- .` discarded whatever the user had
+        changed on main in the meantime, even though main itself was never part of this attempt."""
+        st = self.applied()
+        self.assertEqual(gitc(self.repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        edited = "import unittest\nclass T(unittest.TestCase):\n    def test(self): pass   # still mine, uncommitted\n"
+        (self.repo / "tests/test_ok.py").write_text(edited)        # the user's own, unrelated, UNCOMMITTED edit
+        out = learning.gate("P-1", *self.pair(st, (True, True), (True, False)))    # a regression: triggers revert/cleanup
+        self.assertEqual(out["state"], "reverted")
+        self.assertNotIn("agentsys/lesson-P-1", self.branches())
+        self.assertEqual((self.repo / "tests/test_ok.py").read_text(), edited)
+
     def test_token_growth_reverts_and_the_limit_is_not_rounded(self):
         st = self.applied()
         out = learning.gate("P-1", *self.pair(st, (True, True), (True, True), 10000, 12504))     # +25.04%
@@ -397,6 +433,10 @@ class GateTests(ReviewTests):
             "unfinished run": (good_b, self.write("w4.json", run_doc("a", rows(zip(FULL, (True, True))), st["head_sha"], complete=False))),
             "skipped by budget": (good_b, self.write("w5.json", run_doc("a", [dict(r, status="skipped_budget") for r in rows(zip(FULL, (True, True)))], st["head_sha"]))),
             "same run id": (self.write("w6.json", run_doc("b", rows(zip(FULL, (True, True))), st["base_sha"], run_id="x")), self.write("w7.json", run_doc("a", rows(zip(FULL, (True, True))), st["head_sha"], run_id="x"))),
+            # Review (claims check): "complete" missing entirely used to look like "complete: true" (.get()
+            # returns None, and `None is False` is False), and "git_dirty" missing used to look clean.
+            "complete key missing entirely": (good_b, self.write("w8.json", {k: v for k, v in run_doc("a", rows(zip(FULL, (True, True))), st["head_sha"]).items() if k != "complete"})),
+            "git_dirty key missing entirely": (good_b, self.write("w9.json", {k: v for k, v in run_doc("a", rows(zip(FULL, (True, True))), st["head_sha"]).items() if k != "git_dirty"})),
         }
         for name, (b, a) in cases.items():
             with self.subTest(name):
