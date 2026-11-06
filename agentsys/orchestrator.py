@@ -12,7 +12,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import approvals, config, intake, logger, loop, memory, schema, tasks
+from . import approvals, config, intake, logger, loop, memory, runner, schema, tasks
 from .ledger import BudgetExceeded, Ledger
 
 RESET_GUESS_S = 5 * 3600     # (assumption) when a usage limit hits, retry after this long
@@ -171,18 +171,35 @@ def deliver(task_id, target_repo=None):
         if loop._git(repo, "rev-parse", "--is-inside-work-tree").returncode:
             raise RuntimeError(f"target repo {repo} is not a git repository")
         branch = f"agentsys/{task_id}"
-        if journal and journal.get("target_repo") == str(repo) and journal.get("branch") == branch and journal.get("state") == "delivered":
-            result["branch"] = branch           # already delivered here before (e.g. a crash after success): nothing more to do
+        ws_sha = loop._git(ws, "rev-parse", "HEAD").stdout.strip()
+        # "ours" means OUR journal, for this exact target_repo+branch, says we are the ones who made it -
+        # never inferred just from the branch existing. Without this, deliver() would delete a same-named
+        # branch it never created (e.g. the user's own unrelated work).
+        ours = bool(journal) and journal.get("target_repo") == str(repo) and journal.get("branch") == branch
+        if (ours and journal.get("state") == "delivered" and journal.get("ws_sha") == ws_sha
+                and _branch_exists_in(repo, branch)):
+            result["branch"] = branch           # already delivered here before, for this EXACT content: nothing more to do
             return result
-        orig_branch = loop._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "HEAD"
+        if ours and journal.get("orig_branch"):
+            # Trust the journal, not a fresh `rev-parse --abbrev-ref HEAD`: if the previous attempt crashed
+            # right after `checkout -b branch` succeeded, current HEAD IS `branch` itself, and recomputing
+            # from it would silently adopt the broken branch as its own "original".
+            orig_branch = journal["orig_branch"]
+        else:
+            orig_branch = loop._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "HEAD"
+            if orig_branch == branch:
+                raise RuntimeError(f"{repo} is on {branch} with no record of how it got there: check it out to a safe branch yourself first")
         if _branch_exists_in(repo, branch):
-            # Leftover from an earlier attempt that failed before cleaning up (git am failed, or a crash).
-            # It was never recorded as 'delivered', so it is ours to remove before trying again.
-            loop._git(repo, "checkout", "-q", orig_branch)
+            if not ours:
+                raise RuntimeError(f"branch {branch} already exists in {repo} and was not created by this task's delivery: not touching it")
+            # Ours, but not a confirmed-current delivery: a leftover from a crashed or failed attempt.
+            current = loop._git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            if current == branch and loop._git(repo, "checkout", "-q", orig_branch).returncode:
+                raise RuntimeError(f"cannot check out {orig_branch} in {repo} to clean up the stale branch {branch}")
             loop._git(repo, "branch", "-D", branch)
         if loop._git(repo, "status", "--porcelain").stdout.strip():
             raise RuntimeError(f"target repo {repo} has uncommitted changes: not touching it")
-        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "state": "creating"}), encoding="utf-8")
+        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "ws_sha": ws_sha, "state": "creating"}), encoding="utf-8")
         if loop._git(repo, "checkout", "-q", "-b", branch).returncode:
             raise RuntimeError(f"cannot create branch {branch} in {repo}")
         am = loop._git(repo, "am", "-q", *[str(out / p) for p in patches])
@@ -191,7 +208,7 @@ def deliver(task_id, target_repo=None):
             loop._git(repo, "checkout", "-q", orig_branch)      # leave the target repo where it was, not on the broken branch
             loop._git(repo, "branch", "-D", branch)
             raise RuntimeError(f"patches do not apply cleanly on {repo}: {am.stderr.strip()[:200]}")
-        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "state": "delivered"}), encoding="utf-8")
+        jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "ws_sha": ws_sha, "state": "delivered"}), encoding="utf-8")
         result["branch"] = branch
     return result
 
@@ -231,6 +248,14 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
         except BudgetExceeded as e:
             tasks.set_state(task_id, "blocked", title=entry["title"])
             return finish("blocked", f"Limit hit during intake: {e.reason}. I stopped and need your decision.")
+        except runner.UsageLimitReached as e:
+            # Same as the main build loop's own handling: "paused", not "blocked" (a human doesn't need to
+            # decide anything), and a resume_after so the scheduler doesn't immediately retry the same call
+            # in a tight loop. Previously unhandled here: this would crash _process() on every retry and
+            # leave the queue entry stuck on "queued" forever, since "queued" was never set to anything else.
+            tasks.set_state(task_id, "paused", title=entry["title"])
+            return finish("paused", f"Usage limit reached during intake. State saved. Run the same command again later. ({e})",
+                         resume_after=_now_plus(RESET_GUESS_S))
         if err:
             tasks.set_state(task_id, "blocked", title=entry["title"])
             return finish("blocked", f"intake failed: {err}")

@@ -317,6 +317,26 @@ class LoopTests(TmpHome):
         from agentsys import dashboard_data as dd
         self.assertTrue([e for e in dd.all_events("t1")[0] if e["event_type"] == "alert" and "protected" in e["summary"]])
 
+    def test_a_staged_qa_weakening_is_still_reverted(self):
+        """Review (third round): protect_qa had the same staging gap protect_config was fixed for last
+        round - `checkout -- QA_DIR` alone is a no-op on a change the developer already `git add`ed, since
+        it restores from the (still weakened) INDEX, not HEAD."""
+        qa = lambda: self.ws() / "qa_tests" / "q.py"
+        def tester(prompt):
+            if not qa().exists():
+                qa().parent.mkdir(exist_ok=True); qa().write_text("orig"); return t_fail(prompt)
+            return t_pass(prompt)
+        calls = {"n": 0}
+        def dev(prompt):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                qa().write_text("weakened")
+                loop._git(self.ws(), "add", "-A")      # the developer staged its own change
+            return DEV
+        go("t1", runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": tester}))
+        self.assertEqual(qa().read_text(), "orig")
+        self.assertFalse(loop._git(self.ws(), "status", "--porcelain").stdout.strip())
+
     def test_tester_editing_product_code_invalidates_report(self):
         def tester(prompt):
             (self.ws() / "app.py").write_text("tampered"); return t_pass(prompt)
@@ -386,7 +406,21 @@ class SemanticsTests(unittest.TestCase):
         log2 = [{"tool": "Bash", "command": "python wc.py nope.txt", "output": "wc.py: nope.txt: No such file or directory"}]
         self.assertTrue(semantics.evidence_errors(labelled_fake, log2, strict=True))  # only the generic words match: 63% < 75%
         shortened = report("pass", [_check("x", "pass", ["W1.1"], command="zzz", evidence="Ran 3 tests ... OK")])
-        self.assertEqual(semantics.evidence_errors(shortened, log, strict=True), [])   # real output, shortened with '...' 
+        self.assertEqual(semantics.evidence_errors(shortened, log, strict=True), [])   # real output, shortened with '...'
+
+    def test_command_really_ran_but_claimed_outcome_is_fabricated(self):
+        """Review (third round): a command match alone, with no output check at all, let a report claim
+        ANY outcome for a command that genuinely ran - including the opposite of what really happened."""
+        log = [{"tool": "Bash", "command": "python -m unittest", "output": "FAILED (failures=3)"}]
+        lied = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="all 50 tests passed, everything is green")])
+        self.assertTrue(semantics.evidence_errors(lied, log, strict=True))
+        # a command merely echoed as literal text (never run) is rejected too once evidence is substantive
+        echoed = [{"tool": "Bash", "command": 'echo "python -m unittest"', "output": "python -m unittest"}]
+        fake_run = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="Ran 7 tests, all green, no failures")])
+        self.assertTrue(semantics.evidence_errors(fake_run, echoed, strict=True))
+        # the command really ran AND the evidence matches ITS OWN output: still accepted
+        honest = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="FAILED (failures=3)")])
+        self.assertEqual(semantics.evidence_errors(honest, log, strict=True), [])
 
     def test_command_matching_ignores_whitespace(self):
         r = report("pass", [_check("a", "pass", ["W1.1"], command="python  -m   unittest")])

@@ -40,8 +40,18 @@ def status(approval_id):
 
 
 def _requests_for(task_id, gate):
+    """Sorted by the NUMERIC suffix, not the filename string: a plain string sort puts "...-10.json"
+    before "...-9.json" (since '1' < '9'), so after a 10th request latest() would pick the stale 9th one
+    as "the latest" - realistic once a task's merge approval is re-requested many times (e.g. several
+    retry --answer cycles, each invalidating the prior approval's diff_ref)."""
+    pat = re.compile(rf"^{re.escape(task_id)}-{re.escape(gate)}-(\d+)\.json$")
+    numbered = []
+    for p in _dir("pending").glob(f"{task_id}-{gate}-*.json"):
+        m = pat.match(p.name)
+        if m:
+            numbered.append((int(m.group(1)), p))
     out = []
-    for p in sorted(_dir("pending").glob(f"{task_id}-{gate}-*.json")):
+    for _, p in sorted(numbered, key=lambda t: t[0]):
         doc = _read(p)
         if doc and doc.get("task_id") == task_id and doc.get("gate") == gate:
             out.append(doc)

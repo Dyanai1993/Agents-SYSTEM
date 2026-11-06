@@ -84,7 +84,11 @@ def protect_qa(ws, task_id):
     """Developer must not touch qa_tests/. Revert any change and raise an alert."""
     bad = [f for f in _changed(ws) if _is_qa(f)]
     if bad:
-        _git(ws, "checkout", "--", QA_DIR)
+        # Same staging gap protect_config had: `checkout -- QA_DIR` restores from the INDEX, not HEAD, so a
+        # weakened test the developer already `git add`ed survives as a no-op and gets committed anyway.
+        # Unstage first so the index itself is back to HEAD before restoring the working tree from it.
+        _git(ws, "reset", "-q", "--", QA_DIR)
+        _git(ws, "checkout", "-q", "--", QA_DIR)
         _git(ws, "clean", "-fdq", "--", QA_DIR)
         logger.log_event(task_id, "orchestrator", "alert", f"developer changed protected {QA_DIR}/: reverted", status="blocked",
                          payload={"files": bad})

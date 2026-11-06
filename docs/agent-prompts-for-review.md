@@ -912,9 +912,16 @@ def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
 def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
     """Every pass/fail check must be backed by a real Bash run in the backend's tool log.
 
-    A check is backed when EITHER its command text matches a logged Bash command
-    OR its evidence excerpt is found in the output of a logged Bash call (see _evidence_in_output).
-    The second rule allows one script to verify several checks, while fabricated output is still caught.
+    A check is backed when its evidence excerpt is found in a logged Bash call's own output (see
+    _evidence_in_output) - checked first against the output of calls whose command matches the claim, then,
+    if none match, against the combined output of every Bash call (this is what lets one batched script
+    verify several checks at once). A command match ALONE, with no output check at all, is only enough when
+    the evidence is too short/generic to independently verify either way (below MIN_EVIDENCE_CHARS, e.g.
+    'OK'): a command really matching the log proves the right thing ran, but proves nothing about the
+    claimed OUTCOME. Requiring substantive evidence to match real output closes that gap: a claim like
+    "all 50 tests passed" quoted against a real run that actually printed "FAILED (failures=3)" is rejected
+    even though the command itself genuinely ran, and a command merely echoed as literal text (not run)
+    is rejected too once the evidence is specific enough to check.
     """
     if strict is None:
         strict = os.environ.get("AGENTSYS_EVIDENCE", "strict") != "warn"
@@ -932,12 +939,24 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         # command is a substring of the claim") is unsound: any real but trivial logged command (e.g. an
         # earlier `echo setup`) would then back ANY longer fabricated claim that happens to contain it
         # verbatim, such as `echo setup && python -m unittest` when only `echo setup` was ever run.
-        by_command = bool(cmd) and any(cmd in r for r in ran)
-        if by_command or _evidence_in_output(c["evidence"], outputs):
+        matched = [t for t in bash if cmd and cmd in norm(t.get("command", ""))]
+        by_command = bool(matched)
+        if by_command:
+            own_output = _squash(" ".join(t.get("output", "") for t in matched))
+            if _evidence_in_output(c["evidence"], own_output):
+                continue
+        if _evidence_in_output(c["evidence"], outputs):     # batched-script case: no single command matches, evidence is real somewhere in the log
             continue
+        ev_len = len(_squash(re.sub(r"\.\.\.|…", "", c["evidence"] or "")))
+        if by_command and ev_len < MIN_EVIDENCE_CHARS:
+            continue   # the command really ran; evidence is too short/generic to independently check either way
         shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"
-        errs.append(f"check '{c['name']}': neither its command nor its evidence appears in the tool log. "
-                    f"Claimed command: {cmd[:120]!r}. Logged Bash calls ({len(ran)}): {shown}")
+        if by_command:
+            errs.append(f"check '{c['name']}': its command was really run, but the claimed evidence does not match that "
+                        f"call's output (or any other logged output). Claimed evidence: {c['evidence'][:160]!r}")
+        else:
+            errs.append(f"check '{c['name']}': neither its command nor its evidence appears in the tool log. "
+                        f"Claimed command: {cmd[:120]!r}. Logged Bash calls ({len(ran)}): {shown}")
     return errs
 
 

@@ -95,12 +95,22 @@ def _payload(ref):
 
 
 def inbox_lessons():
+    """Every lesson's `text` and `role` are re-derived from `kind` here, never trusted from the file on
+    disk. The template-only guarantee is otherwise enforced only when a NEW lesson is written by _lesson()
+    - a file from before that existed (or written by any future bug, or hand-edited) could still carry
+    arbitrary free text in `text`, and nothing would ever re-check it against TEMPLATES. Re-deriving on
+    every read closes that permanently: the stored text/role are simply ignored."""
     _, inbox = _dirs()
     out = []
     for p in sorted(inbox.glob("*.json")):
         les = _read(p)
-        if les and not schema.errors_for("lesson", les):
-            out.append(les)
+        if not les or schema.errors_for("lesson", les):
+            continue
+        tpl = TEMPLATES.get(les.get("kind"))
+        if tpl is None:
+            continue
+        role, text = tpl
+        out.append(dict(les, role=role, text=text[:200]))
     return out
 
 

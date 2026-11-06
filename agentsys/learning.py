@@ -193,24 +193,33 @@ def _current_ref():
     return _must("rev-parse", "HEAD") if ref == "HEAD" else ref          # detached HEAD: remember the commit
 
 
-def _cleanup(start_ref, branch):
+def _cleanup(start_ref, branch, *, discard_uncommitted):
     """Best effort, but REPORTED: returns a list of problems. Never claims success silently.
 
-    Only touches the working tree when we are actually still ON `branch` (an apply() attempt failed mid-way).
+    `discard_uncommitted` must be True ONLY when the caller knows any uncommitted change on `branch` is
+    this attempt's own failed edit (apply()'s own except-block, right after writing the file - nothing
+    else could have touched the repo in that window). It must be False for gate()'s revert path: gate()
+    requires the branch to be checked out to run the "after" eval, so by the time gate() runs, the repo is
+    very likely sitting ON `branch` with its proposal commit already made - `current == branch` on its own
+    does NOT mean "this is a failed apply attempt" the way it used to be assumed. Discarding unconditionally
+    there could delete a later, unrelated, uncommitted edit the user made on the branch while reviewing it.
+    With discard_uncommitted=False, uncommitted changes on `branch` are left alone and reported as a
+    problem instead - the branch is not deleted and the caller must not treat this as success.
+
     `checkout -- .` restores files from the INDEX, not HEAD: if this attempt already `git add`ed its edit
     before failing, the index already holds that edit, so `checkout -- .` was a no-op that left it staged -
     and then checking out start_ref carried the staged edit onto it. `reset --hard HEAD` discards it instead,
-    since HEAD on `branch` is still identical to start_ref at this point (nothing was committed yet).
-    When gate() calls this to revert a kept branch, we are already back on start_ref (apply() put us there
-    on success) - there is nothing of this attempt's left in the working tree, so nothing is reset here:
-    doing so anyway would discard whatever the user is unrelatedly working on in their own checkout."""
+    since HEAD on `branch` is still identical to start_ref at this point (nothing was committed yet)."""
     problems = []
     current = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if current == branch:
-        r = _git("reset", "--hard", "HEAD")
-        if r.returncode:
-            problems.append(f"could not discard changes on {branch}: {r.stderr.strip()[:120]}")
-        _git("clean", "-fdq", "--", "memory/patterns")
+        if discard_uncommitted:
+            r = _git("reset", "--hard", "HEAD")
+            if r.returncode:
+                problems.append(f"could not discard changes on {branch}: {r.stderr.strip()[:120]}")
+            _git("clean", "-fdq", "--", "memory/patterns")
+        elif _git("status", "--porcelain").stdout.strip():
+            return [f"{branch} has uncommitted changes: not discarding them, branch not deleted"]
         r = _git("checkout", "-q", start_ref)
         if r.returncode:
             problems.append(f"could not return to {start_ref}: {r.stderr.strip()[:120]}")
@@ -265,7 +274,7 @@ def apply(pid, *, run_checks=True):
         head_sha = _must("rev-parse", "HEAD")
         _must("checkout", "-q", start_ref)
     except BaseException as e:                                  # includes KeyboardInterrupt
-        problems = _cleanup(start_ref, branch)
+        problems = _cleanup(start_ref, branch, discard_uncommitted=True)   # this attempt's own edit: safe to discard
         _state(pid, "cleanup_failed" if problems else ("interrupted" if not isinstance(e, Exception) else "failed_checks"),
                error=str(e)[:300], cleanup_problems=problems)
         raise
@@ -273,11 +282,15 @@ def apply(pid, *, run_checks=True):
 
 
 def recover(pid):
-    """After an interrupted or half-cleaned apply: return to the start ref, delete the branch, make the proposal 'proposed' again."""
+    """After an interrupted or half-cleaned apply, or a gate revert that could not clean up: return to the
+    start ref, delete the branch, make the proposal 'proposed' again."""
     doc, state = load(pid)
     if state.get("state") not in ("applying", "interrupted", "cleanup_failed", "failed_checks", "revert_failed"):
         raise ValueError(f"{pid} is '{state.get('state')}': nothing to recover")
-    problems = _cleanup(state["start_ref"], state["branch"])
+    # revert_failed came from gate(), where uncommitted work on the branch may be the user's own, not this
+    # attempt's: stay conservative there, same as gate() itself. Every other state is an apply() failure.
+    discard = state.get("state") != "revert_failed"
+    problems = _cleanup(state["start_ref"], state["branch"], discard_uncommitted=discard)
     if problems:
         return _state(pid, "cleanup_failed", cleanup_problems=problems)
     return _state(pid, "proposed", cleanup_problems=[], error=None)
@@ -358,7 +371,7 @@ def gate(pid, before_path, after_path, *, max_token_growth_pct=25):
     if cmp["token_change_exact"] > max_token_growth_pct:
         reasons.append(f"tokens grew {cmp['token_change_pct']}% (limit {max_token_growth_pct}%)")
     if reasons:
-        problems = _cleanup(state.get("start_ref") or "main", branch)
+        problems = _cleanup(state.get("start_ref") or "main", branch, discard_uncommitted=False)   # may be on `branch`; never assume uncommitted work there is ours to discard
         if problems:
             _state(pid, "revert_failed", reasons=reasons, comparison=cmp, cleanup_problems=problems)
             raise RuntimeError("could not delete the branch: " + "; ".join(problems))

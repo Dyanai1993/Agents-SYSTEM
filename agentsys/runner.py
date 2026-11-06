@@ -108,7 +108,73 @@ class FakeBackend:
                            init={"apiKeySource": self.api_key_source})
 
 
-def _kill_tree(p):
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+    _JobObjectExtendedLimitInformation = 9
+    _PROCESS_SET_QUOTA = 0x0100
+    _PROCESS_TERMINATE = 0x0001
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [("ReadOperationCount", ctypes.c_uint64), ("WriteOperationCount", ctypes.c_uint64),
+                    ("OtherOperationCount", ctypes.c_uint64), ("ReadTransferCount", ctypes.c_uint64),
+                    ("WriteTransferCount", ctypes.c_uint64), ("OtherTransferCount", ctypes.c_uint64)]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.POINTER(ctypes.c_ulong)), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION), ("IoInfo", _IO_COUNTERS),
+                    ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    def _create_job_for(pid):
+        """A Windows Job Object containing `pid` and (by default) every process it ever spawns, with
+        KILL_ON_JOB_CLOSE so closing the handle tears the whole tree down. Unlike `taskkill /T`, which walks
+        the tree by querying the ROOT pid's children at kill time, TerminateJobObject kills every process the
+        job ever contained even if the root (our direct child) already exited - unblocking an orphaned
+        grandchild that inherited our stdout pipe and is still holding it open. Returns None on any failure
+        (missing privilege, process already gone): callers must still fall back to `taskkill /T`."""
+        job = _kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not _kernel32.SetInformationJobObject(job, _JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)):
+            _kernel32.CloseHandle(job)
+            return None
+        hproc = _kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
+        if not hproc:
+            _kernel32.CloseHandle(job)
+            return None
+        try:
+            if not _kernel32.AssignProcessToJobObject(job, hproc):
+                _kernel32.CloseHandle(job)
+                return None
+        finally:
+            _kernel32.CloseHandle(hproc)
+        return job
+
+    def _kill_job(job):
+        if job:
+            _kernel32.TerminateJobObject(job, 1)
+            _kernel32.CloseHandle(job)
+else:
+    def _create_job_for(pid):
+        return None
+
+    def _kill_job(job):
+        pass
+
+
+def _kill_tree(p, job=None):
     """Kill the process AND its children. On Windows `claude` may be a .cmd shim: killing only the shim leaves the real
     process holding our pipe open until it finishes. On POSIX the process runs in its own group.
 
@@ -117,10 +183,16 @@ def _kill_tree(p):
     resolvable process; if p already exited (e.g. it crashed right after forking a child that inherited our
     stdout pipe and kept running), getpgid fails and nothing is signalled, so the orphaned child keeps the
     pipe open and our read loop blocks forever. killpg on the numeric group id works even once p is gone, as
-    long as any member of that group (the orphan) is still alive."""
+    long as any member of that group (the orphan) is still alive.
+
+    On Windows, `job` (from _create_job_for, assigned right after Popen) is tried FIRST for the same reason:
+    `taskkill /T` needs p.pid to still resolve to walk its tree, which fails exactly when p already exited and
+    left an orphan behind. The job object has no such dependency. `taskkill /T` still runs as a fallback for
+    any process the job did not catch (e.g. one that already broke away before assignment)."""
     import signal
     try:
         if os.name == "nt":
+            _kill_job(job)
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
         else:
             os.killpg(p.pid, signal.SIGKILL)
@@ -157,11 +229,12 @@ class CliBackend:
         err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True, cwd=cwd, env=env,
                              start_new_session=(os.name != "nt"))
+        job = _create_job_for(p.pid) if os.name == "nt" else None      # assigned ASAP: see _create_job_for's docstring
         timed_out = threading.Event()
 
         def kill_on_timeout():
             timed_out.set()
-            _kill_tree(p)
+            _kill_tree(p, job)
         timer = threading.Timer(limits.timeout_s, kill_on_timeout)
         timer.start()
 
@@ -185,16 +258,16 @@ class CliBackend:
                     init = msg
                     problems = billing_guard.check_init_message(msg)
                     if problems:
-                        _kill_tree(p)                   # stop before the agent does any work
+                        _kill_tree(p, job)              # stop before the agent does any work
                         raise billing_guard.BillingGuardError(problems)
                 elif msg.get("type") == "result":
                     if init is None:          # stream completed (or skipped straight to a result) without ever
-                        _kill_tree(p)          # proving the credential source: fail closed, same as a bad init
+                        _kill_tree(p, job)     # proving the credential source: fail closed, same as a bad init
                         raise billing_guard.BillingGuardError(["no init message received before the result: cannot prove the credential source"])
                     result = msg
                 elif msg.get("type") in ("assistant", "user"):
                     if init is None:          # real agent output arrived before any init message: the process did
-                        _kill_tree(p)          # work with an unverified credential source - stop it now, not after
+                        _kill_tree(p, job)     # work with an unverified credential source - stop it now, not after
                         raise billing_guard.BillingGuardError(["no init message received before agent output: cannot prove the credential source"])
                     content = (msg.get("message") or {}).get("content")
                     for blk in content if isinstance(content, list) else []:
@@ -211,7 +284,9 @@ class CliBackend:
         finally:
             timer.cancel()
             if p.poll() is None:
-                _kill_tree(p)
+                _kill_tree(p, job)
+            elif job:
+                _kernel32.CloseHandle(job)   # process exited on its own: release the job handle, never used to kill
             try:
                 p.wait(timeout=10)                      # reap the process: no zombies
             except (subprocess.TimeoutExpired, OSError):
@@ -243,8 +318,23 @@ class CliBackend:
                                   "output_tokens": u.get("output_tokens", 0), "turns": result.get("num_turns", 1)})
 
 
+def build_sdk_options(sdk, *, system_prompt, tools, model, limits, cwd, env):
+    """Split out so unit tests can verify it against a real installed `claude_agent_sdk` (structural
+    check only - no network, no login needed) without running the async query itself.
+
+    `tools` restricts which tools EXIST (matches CliBackend's --tools); `allowed_tools` only auto-approves
+    prompts for tools already available, the same split the CLI makes between --tools and --allowedTools.
+    Passing only allowed_tools (as this used to) left every built-in tool available regardless of `tools`
+    given to this call. strict_mcp_config matches --strict-mcp-config."""
+    return sdk.ClaudeAgentOptions(system_prompt=system_prompt or None, tools=list(tools or []),
+                                  allowed_tools=list(tools or []), strict_mcp_config=True,
+                                  model=model, max_turns=limits.max_turns, cwd=str(cwd) if cwd else None,
+                                  env=dict(env or {}))
+
+
 class SdkBackend:
-    """Claude Agent SDK. NOT exercised by unit tests (needs a live login). Verify in Phase 2."""
+    """Claude Agent SDK. NOT exercised live by unit tests (needs a live login); options construction IS
+    tested against a real installed SDK when available (optional dependency)."""
     name = "sdk"
 
     def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
@@ -255,9 +345,7 @@ class SdkBackend:
             return AgentResult(role=role, ok=False, backend=self.name, error=f"claude-agent-sdk not installed: {e}")
 
         async def go():
-            opts = sdk.ClaudeAgentOptions(system_prompt=system_prompt or None, allowed_tools=list(tools or []),
-                                          model=model, max_turns=limits.max_turns, cwd=str(cwd) if cwd else None,
-                                          env=dict(env or {}))
+            opts = build_sdk_options(sdk, system_prompt=system_prompt, tools=tools, model=model, limits=limits, cwd=cwd, env=env)
             init, result = None, None
             agen = sdk.query(prompt=prompt, options=opts)
             try:

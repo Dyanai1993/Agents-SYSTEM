@@ -69,8 +69,12 @@ def run_real(backend, label, only=None, home=None, token_budget=None, resume_dir
         # The manifest is the ONLY source of truth for what commit this run started on. A run resumed on a
         # different commit (e.g. after checking out a lesson-proposal branch) would silently reuse old,
         # already-measured checkpoints and tag them with the new commit's sha - the "after" run would then
-        # look genuinely measured on the branch to the eval gate, when it was not re-run at all.
-        if manifest.get("git_sha") and manifest["git_sha"] != sha:
+        # look genuinely measured on the branch to the eval gate, when it was not re-run at all. A manifest
+        # with no git_sha at all (e.g. written before this check existed) must not silently bypass it either.
+        if not manifest.get("git_sha"):
+            raise ValueError(f"--resume {resume_dir}'s manifest has no recorded git_sha: cannot verify what "
+                              f"commit it started on, so it cannot be safely resumed. Start a new run instead.")
+        if manifest["git_sha"] != sha:
             raise ValueError(f"--resume {resume_dir} was started on {manifest['git_sha'][:8]}, but the current "
                               f"checkout is on {sha[:8]}: check out the original commit before resuming, or start a new run")
     else:
@@ -88,6 +92,16 @@ def run_real(backend, label, only=None, home=None, token_budget=None, resume_dir
         for task in TASKS:
             if only and task.name not in only:
                 continue
+            # `sha` was captured once, at the top of this function. TASKS, each task's task.json/check.py,
+            # and the real repo files underneath this run's own code are all read fresh from disk for EVERY
+            # task as the (possibly hours-long, sequential) run proceeds - a commit landing mid-run would
+            # otherwise be silently measured by later tasks while the whole run still reports the FIRST sha,
+            # as if every task had been measured under one single, consistent version.
+            now_sha = _git_state()[0]
+            if now_sha != sha:
+                raise RuntimeError(f"the repository changed mid-run: started on {sha[:8]}, now on {now_sha[:8]} "
+                                    f"(at task {task.name}). Results so far are saved; nothing after this is measured "
+                                    f"under one consistent commit. Start a new run on a frozen checkout instead.")
             if token_budget and token_budget - spent <= 0:
                 rows.append({"id": task.name, "passed": False, "status": "skipped_budget", "fix_loops": 0, "replans": 0, "calls": 0,
                              "tokens": 0, "seconds": 0, "detail": "token budget for the eval run was used up"})

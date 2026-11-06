@@ -35,6 +35,17 @@ class ApprovalTests(TmpHome):
         self.assertEqual(approvals.request("t1", "merge", "c")["id"], a["id"])
         self.assertNotEqual(approvals.request("t1", "merge", "c", new=True)["id"], a["id"])
 
+    def test_ordering_survives_past_nine_requests(self):
+        """Review (third round, missing-tests note): a plain string sort of filenames puts '...-10.json'
+        before '...-9.json' ('1' < '9'), so after a 10th request for the same task+gate, latest() picked
+        the stale 9th (rejected) request instead of the actual latest (pending) one."""
+        for i in range(1, 10):
+            approvals.decide(approvals.request("t1", "merge", f"ctx{i}", diff_ref=f"v{i}", new=(i > 1))["id"], "rejected")
+        tenth = approvals.request("t1", "merge", "ctx10", diff_ref="v10", new=True)
+        self.assertEqual(tenth["id"], "t1-merge-10")
+        doc, st = approvals.latest("t1", "merge")
+        self.assertEqual(doc["id"], "t1-merge-10"); self.assertEqual(st, "pending")
+
     def test_bad_ids_and_unknown_requests(self):
         for bad in ("../x", "", "a/b"):
             with self.assertRaises(approvals.ApprovalError):
@@ -145,6 +156,67 @@ class OrchestratorTests(TmpHome):
         e = proc("t1", f)
         self.assertEqual(e["status"], "blocked"); self.assertIn("not a git repository", e["note"])
 
+    def test_a_foreign_branch_of_the_same_name_is_never_deleted(self):
+        """Review (third round): deliver() used to delete ANY existing branch of that name, with no proof
+        the system created it - including the user's own unrelated branch that happens to collide."""
+        repo = self.home / "target"; repo.mkdir()
+        git(repo, "init", "-q", "-b", "main"); (repo / "README").write_text("x"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
+        git(repo, "checkout", "-q", "-b", "agentsys/t1")
+        (repo / "mine.py").write_text("print('not agentsys')\n"); git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "my own work")
+        git(repo, "checkout", "-q", "main")
+        orchestrator.submit("t1", requirements=REQ, target_repo=repo)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "blocked"); self.assertIn("not created by this task's delivery", e["note"])
+        self.assertIn("agentsys/t1", self.branches_of(repo))
+        self.assertEqual(git(repo, "show", "agentsys/t1:mine.py").stdout, "print('not agentsys')\n")
+
+    def branches_of(self, repo):
+        return git(repo, "branch").stdout
+
+    def test_redelivering_after_new_commits_actually_redelivers(self):
+        """Review (third round): the idempotency shortcut only checked target_repo+branch+'delivered', not
+        the content version - a retry that added new commits after a successful delivery would report
+        success again without ever running `git am` on the new patches, leaving the target branch stale."""
+        repo = self.home / "target"; repo.mkdir()
+        git(repo, "init", "-q", "-b", "main"); (repo / "README").write_text("x"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
+        orchestrator.submit("t1", requirements=REQ, target_repo=repo)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        d1 = orchestrator.deliver("t1", repo)
+        self.assertEqual(git(repo, "show", "agentsys/t1:app.py").stdout, "print('hi')\n")
+        # a new commit lands on the task's workspace after the first delivery (e.g. a later retry's fix)
+        ws = self.ws("t1")
+        (ws / "app.py").write_text("print('updated')\n")
+        loop._git(ws, "add", "-A"); loop._git(ws, "commit", "-q", "-m", "W2: update")
+        d2 = orchestrator.deliver("t1", repo)
+        self.assertEqual(d2["branch"], "agentsys/t1")
+        self.assertEqual(git(repo, "show", "agentsys/t1:app.py").stdout, "print('updated')\n")   # actually redelivered
+
+    def test_recovery_after_a_crash_mid_delivery_uses_the_journaled_original_branch(self):
+        """Review (third round): if the process crashed right after `checkout -b branch` succeeded (so
+        current HEAD IS `branch` itself), a fresh `rev-parse --abbrev-ref HEAD` on retry would adopt the
+        broken branch as its own "original" instead of the journal's saved main/start branch."""
+        repo = self.home / "target"; repo.mkdir()
+        git(repo, "init", "-q", "-b", "main"); (repo / "README").write_text("x"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
+        orchestrator.submit("t1", requirements=REQ, target_repo=repo)
+        f = fb(developer=self.dev_writes("t1"))
+        proc("t1", f)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        # Simulate a crash right after deliver() created the branch but before `git am` ran: write the
+        # journal as deliver() would at that point, and leave the repo checked out on the half-finished branch.
+        tdir = self.home / "tasks" / "t1"
+        git(repo, "checkout", "-q", "-b", "agentsys/t1")
+        (tdir / "delivery.json").write_text(json.dumps({"target_repo": str(repo), "branch": "agentsys/t1",
+                                                         "orig_branch": "main", "ws_sha": "stale", "state": "creating"}))
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "done")
+        self.assertEqual(git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "agentsys/t1")  # delivered, left on the branch
+        self.assertEqual(git(repo, "show", "agentsys/t1:app.py").stdout, "print('hi')\n")
+
     def test_deliver_is_idempotent_after_a_crash_between_delivery_and_done(self):
         repo = self.home / "target"; repo.mkdir()
         git(repo, "init", "-q", "-b", "main"); (repo / "README").write_text("x"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
@@ -204,6 +276,17 @@ class OrchestratorTests(TmpHome):
         orchestrator.submit("t1", request_text="x")
         e = proc("t1", fb(orchestrator={"nope": 1}))
         self.assertEqual(e["status"], "blocked"); self.assertIn("intake failed", e["note"])
+
+    def test_intake_usage_limit_pauses_instead_of_crashing(self):
+        """Review (third round): intake had a BudgetExceeded handler but none for UsageLimitReached, which
+        runner.run_agent also raises - this crashed _process() with the queue entry stuck on 'queued'
+        forever (never set to 'blocked'), and nothing stopped the scheduler from immediately retrying the
+        same call in a tight loop."""
+        orchestrator.submit("t1", request_text="x")
+        e = proc("t1", fb(orchestrator=runner.UsageLimitReached("5-hour limit reached")))
+        self.assertEqual(e["status"], "paused")
+        self.assertIn("Usage limit reached", e["note"])
+        self.assertIsNotNone(e["resume_after"]); self.assertGreater(e["resume_after"], time.time())
 
     def test_submit_validation(self):
         with self.assertRaises(ValueError): orchestrator.submit("t1")

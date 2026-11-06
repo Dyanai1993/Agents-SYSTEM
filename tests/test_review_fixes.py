@@ -108,17 +108,40 @@ class CliBackendHardeningTests(TmpHome):
         r = runner.run_agent("smoke", {}, task_id="t1", backend=runner.CliBackend(), env=env, settings_paths=[], limits=runner.Limits(max_turns=1, timeout_s=1))
         self.assertFalse(r.ok); self.assertIn("timeout", r.error); self.assertLess(time.time() - t0, 15)
 
-    @unittest.skipIf(os.name == "nt", "process groups are POSIX-specific; Windows kills by PID via taskkill /T")
     def test_timeout_kills_an_orphan_even_if_the_direct_child_already_exited(self):
-        """Review: the direct child (our `claude` process) can exit right after forking a grandchild that
-        inherited our stdout pipe. os.killpg must use the numeric group id (== p.pid, start_new_session=True)
-        so the orphan is still reachable even once the direct child is gone - not os.getpgid(p.pid), which
-        needs the direct child to still be a resolvable process."""
+        """Review (second round, reproduced live on this Windows machine): the direct child (our `claude`
+        process) can exit right after forking a grandchild that inherited our stdout pipe. `taskkill /T`
+        needs the direct child's pid to still resolve to walk its tree, which fails exactly when it already
+        exited - the same gap os.getpgid(p.pid) had on POSIX. On Windows this is now backed by a Job Object
+        (_create_job_for), assigned right after Popen, which kills every process it ever contained
+        regardless of whether the direct child is still alive. On POSIX, killpg uses the numeric group id
+        (== p.pid, start_new_session=True) directly, with no lookup through the (possibly already-gone) child."""
         body = "import subprocess,sys\nsys.stdin.read()\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
         env = fake_claude(self.home, body)
         t0 = time.time()
         r = runner.run_agent("smoke", {}, task_id="t1", backend=runner.CliBackend(), env=env, settings_paths=[], limits=runner.Limits(max_turns=1, timeout_s=1))
         self.assertFalse(r.ok); self.assertIn("timeout", r.error); self.assertLess(time.time() - t0, 15)
+
+
+class SdkBackendOptionsTests(unittest.TestCase):
+    """Review: SdkBackend only ever set allowed_tools (auto-approval), never restricted which tools EXIST,
+    unlike CliBackend's --tools. Structural only (building ClaudeAgentOptions) - no network, no login, no
+    real query. claude-agent-sdk is an optional dependency (commented out in requirements.txt); skipped
+    automatically where it is not installed."""
+
+    def test_tools_restricts_availability_not_just_auto_approval(self):
+        try:
+            import claude_agent_sdk as sdk
+        except ImportError:
+            self.skipTest("claude-agent-sdk not installed (optional dependency)")
+        opts = runner.build_sdk_options(sdk, system_prompt="sp", tools=["Read", "Bash"], model="sonnet",
+                                        limits=runner.Limits(max_turns=5, timeout_s=10), cwd="/tmp", env={})
+        self.assertEqual(opts.tools, ["Read", "Bash"])          # restricts what EXISTS (CLI's --tools)
+        self.assertEqual(opts.allowed_tools, ["Read", "Bash"])  # auto-approves prompts (CLI's --allowedTools)
+        self.assertTrue(opts.strict_mcp_config)
+        empty = runner.build_sdk_options(sdk, system_prompt=None, tools=[], model="haiku",
+                                         limits=runner.Limits(max_turns=1, timeout_s=10), cwd=None, env={})
+        self.assertEqual(empty.tools, [])                        # empty list = no tools, same as CLI's --tools ""
 
 
 class TokenCapTests(TmpHome):
@@ -191,6 +214,44 @@ class EvalRunTests(TmpHome):
             self.assertEqual(out2["run_id"], out1["run_id"])
         finally:
             ev._git_state = real_git_state
+
+    def test_resuming_a_manifest_without_git_sha_is_refused(self):
+        """Review finding 6b: `manifest.get("git_sha") and ...` short-circuits to skip the mismatch check
+        entirely when git_sha is simply ABSENT (e.g. a manifest written before this check existed), silently
+        allowing a resume on any commit."""
+        ev = self.run_evals()
+        home = self.home / "r5"; home.mkdir(parents=True)
+        (home / "run.json").write_text(json.dumps({"run_id": "old-1", "label": "old"}))   # no git_sha at all
+        with self.assertRaises(ValueError) as cm:
+            ev.run_real(self.backend(), "resumetest", only=["01-static-form"], home=home, resume_dir=home)
+        self.assertIn("no recorded git_sha", str(cm.exception))
+
+    def test_mid_run_commit_change_aborts_and_keeps_partial_results(self):
+        """Review finding 6a: TASKS, each task's task.json/check.py, and the real repo files underneath a
+        sequential real run are all read fresh from disk per task as the run proceeds (it can take minutes
+        to hours) - a commit landing mid-run used to be silently absorbed, with the whole run still
+        reporting the FIRST sha as if everything had been measured under one consistent version."""
+        ev = self.run_evals()
+        real_git_state = ev._git_state
+        calls = {"n": 0}
+        def fake():
+            calls["n"] += 1
+            return ("aaaaaaaa1111", "main", False) if calls["n"] <= 2 else ("ccccccccc3333", "main", False)
+        results_files = []
+        try:
+            ev._git_state = fake
+            with self.assertRaises(RuntimeError) as cm:
+                ev.run_real(self.backend(), "midrun", only=["01-static-form", "02-api-endpoint"], home=self.home / "r4")
+            self.assertIn("changed mid-run", str(cm.exception))
+            results_files = sorted((ev.HERE / "results").glob("real-midrun-*.json"))
+            self.assertTrue(results_files)
+            saved = json.loads(results_files[-1].read_text())
+            self.assertFalse(saved["complete"])
+            self.assertEqual([r["id"] for r in saved["results"]], ["01-static-form"])   # task 1 saved; task 2 never ran
+        finally:
+            ev._git_state = real_git_state
+            for p in results_files:
+                p.unlink(missing_ok=True)
 
     def test_budget_must_be_positive_and_is_a_cap_inside_the_task(self):
         ev = self.run_evals()
@@ -281,13 +342,17 @@ class CleanDeliveryTests(TmpHome):
         """T-0010 was built before the workspace .gitignore existed: its commit already holds a .pyc and a pycache folder."""
         from agentsys import approvals, orchestrator
         orchestrator.submit("t1", requirements=REQ)
+        # Pre-existing history, committed BEFORE the developer's own turn - not something the developer
+        # touches this run. protect_qa() (correctly) reverts any CURRENT developer change to qa_tests/, so
+        # planting this via the dev() callback would just get caught and reverted by that guard; this
+        # models "an old workspace already has this junk/content", exactly as the test's docstring says.
+        ws = loop.ensure_workspace(self.home / "tasks/t1")
+        (ws / "__pycache__").mkdir(exist_ok=True); (ws / "__pycache__/old.cpython-313.pyc").write_bytes(b"\x00")
+        (ws / "sub/__pycache__").mkdir(parents=True, exist_ok=True); (ws / "sub/__pycache__/x.pyc").write_bytes(b"\x00")
+        (ws / "qa_tests").mkdir(exist_ok=True); (ws / "qa_tests/real_test.py").write_text("print('qa')")
+        loop._git(ws, "add", "-f", "-A"); loop._git(ws, "commit", "-q", "-m", "old commit with junk and a real qa test")
         def dev(prompt):
-            ws = self.ws()
             (ws / "app.py").write_text("print(1)")
-            (ws / "__pycache__").mkdir(exist_ok=True); (ws / "__pycache__/old.cpython-313.pyc").write_bytes(b"\x00")
-            (ws / "sub/__pycache__").mkdir(parents=True, exist_ok=True); (ws / "sub/__pycache__/x.pyc").write_bytes(b"\x00")
-            (ws / "qa_tests").mkdir(exist_ok=True); (ws / "qa_tests/real_test.py").write_text("print('qa')")
-            loop._git(ws, "add", "-f", "-A")                  # an old workspace: junk is already staged and will be committed
             return DEV
         f = runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass})
         orchestrator.process("t1", backend=f, env={}, settings_paths=[])
