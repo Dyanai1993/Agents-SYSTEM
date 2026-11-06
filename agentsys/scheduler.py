@@ -51,4 +51,7 @@ def run_next(*, backend, env=None, settings_paths=None, now=None, estimate_items
             e["note"] = f"not started: {why}"
             orchestrator.save_entry(e)
             return {"skipped": why, "task_id": e["task_id"]}
-    return orchestrator.process(e["task_id"], backend=backend, env=env, settings_paths=settings_paths)
+    try:
+        return orchestrator.process(e["task_id"], backend=backend, env=env, settings_paths=settings_paths)
+    except orchestrator.TaskBusy as busy:
+        return {"skipped": str(busy), "task_id": e["task_id"]}

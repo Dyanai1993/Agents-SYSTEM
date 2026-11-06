@@ -38,10 +38,97 @@ def selfcheck():
     return rows
 
 
+def run_real(backend, label, only=None, home=None, token_budget=None):
+    """Run the agent loop on every eval task (REAL quota with a real backend) and apply each task's check.
+
+    Metrics per task: passed, status, fix loops, re-plans, agent calls, tokens (estimate), seconds.
+    """
+    import os
+    sys.path.insert(0, str(HERE.parent))
+    from agentsys import loop, config
+    home = Path(home or HERE / "runs" / label)
+    home.mkdir(parents=True, exist_ok=True)
+    old_home = os.environ.get("AGENTSYS_HOME")
+    os.environ["AGENTSYS_HOME"] = str(home)
+    rows, spent = [], 0
+    try:
+        for task in TASKS:
+            if only and task.name not in only:
+                continue
+            if token_budget and spent >= token_budget:
+                rows.append({"id": task.name, "passed": False, "status": "skipped_budget", "fix_loops": 0, "replans": 0, "calls": 0,
+                             "tokens": 0, "seconds": 0, "detail": "token budget for the eval run was used up"})
+                continue
+            spec = json.loads((task / "task.json").read_text(encoding="utf-8"))
+            req = {"goal": spec["prompt"], "constraints": [], "acceptance_criteria": [spec["expected"]], "risks": [], "unknowns": []}
+            tid = f"eval-{task.name}"
+            t0 = time.time()
+            res = loop.run_task(tid, req, backend=backend, title=spec["title"], seed=(task / "fixtures") if (task / "fixtures").is_dir() else None)
+            ws = config.home() / "tasks" / tid / "workspace"
+            if res["status"] == "needs_input":      # an agent that asks instead of guessing: record the questions as the result file
+                plan = config.home() / "tasks" / tid / "plan.json"
+                qs = json.loads(plan.read_text())["questions"] if plan.exists() and "questions" in json.loads(plan.read_text()) else [res["message"]]
+                (ws / "needs_input.json").write_text(json.dumps({"questions": [q if q.strip().endswith("?") else q.strip() + "?" for q in qs]}))
+            ok, detail = check(task, ws)
+            bud = json.loads((config.home() / "tasks" / tid / "budget.json").read_text()) if (config.home() / "tasks" / tid / "budget.json").exists() else {}
+            spent += bud.get("tokens_est", 0)
+            rows.append({"id": task.name, "passed": ok, "status": res["status"], "fix_loops": bud.get("fix_loops", 0), "replans": bud.get("replans", 0),
+                         "calls": bud.get("calls", 0), "tokens": bud.get("tokens_est", 0), "seconds": round(time.time() - t0, 1), "detail": "" if ok else detail[:200]})
+    finally:
+        if old_home is None:
+            os.environ.pop("AGENTSYS_HOME", None)
+        else:
+            os.environ["AGENTSYS_HOME"] = old_home
+    out = {"mode": "real", "label": label, "ts": datetime.now(timezone.utc).isoformat(), "backend": getattr(backend, "name", "?"), "results": rows}
+    (HERE / "results").mkdir(exist_ok=True)
+    path = HERE / "results" / f"real-{label}-{int(time.time())}.json"
+    path.write_text(json.dumps(out, indent=2))
+    return out, path
+
+
+def print_table(rows):
+    print(f"{'task':<24}{'passed':<8}{'status':<17}{'fix':<5}{'calls':<7}{'tokens':<9}{'sec':<6}")
+    for r in rows:
+        print(f"{r['id']:<24}{'yes' if r['passed'] else 'NO':<8}{r['status']:<17}{r['fix_loops']:<5}{r['calls']:<7}{r['tokens']:<9}{r['seconds']:<6}{r['detail'][:60]}")
+    print(f"\n{sum(r['passed'] for r in rows)}/{len(rows)} passed, {sum(r['tokens'] for r in rows)} tokens (estimate)")
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "selfcheck"
+    if mode == "real":
+        import argparse
+        ap = argparse.ArgumentParser()
+        ap.add_argument("mode"); ap.add_argument("--label", required=True)
+        ap.add_argument("--backend", default="cli", choices=["cli", "sdk"]); ap.add_argument("--only", action="append")
+        ap.add_argument("--token-budget", type=int, default=900_000)
+        ap.add_argument("--yes", action="store_true", help="confirm that this spends subscription usage")
+        a = ap.parse_args()
+        n = len(a.only or TASKS)
+        print(f"REAL eval: {n} task(s), about {n * 90_000} tokens (estimate) on your subscription. Sequential.")
+        if not a.yes:
+            sys.exit("add --yes to start")
+        sys.path.insert(0, str(HERE.parent))
+        from agentsys import billing_guard, runner
+        try:
+            billing_guard.run_guard()
+        except billing_guard.BillingGuardError as e:
+            sys.exit(f"{e}")
+        out, path = run_real(runner.get_backend(a.backend), a.label, a.only, token_budget=a.token_budget)
+        print_table(out["results"]); print("saved:", path)
+        sys.exit(0)
+    if mode == "compare":
+        sys.path.insert(0, str(HERE.parent))
+        from agentsys import learning
+        before, after = (json.loads(Path(p).read_text()) for p in sys.argv[2:4])
+        c = learning.compare_results(before, after)
+        print(f"{'task':<24}{'before':<8}{'after':<8}{'fix b/a'}")
+        for r in c["rows"]:
+            print(f"{r['id']:<24}{str(r['before']):<8}{str(r['after']):<8}{r['fix_before']}/{r['fix_after']}")
+        print(f"\npassed {c['pass_before']} -> {c['pass_after']}, tokens {c['tokens_before']} -> {c['tokens_after']} ({c['token_change_pct']:+}%)")
+        print("REGRESSIONS:", c["regressions"] or "none")
+        sys.exit(1 if c["regressions"] else 0)
     if mode != "selfcheck":
-        sys.exit("real mode arrives in Phase 2 (it costs usage). Use: selfcheck")
+        sys.exit("modes: selfcheck | real --label L --yes | compare BEFORE.json AFTER.json")
     rows = selfcheck()
     out = {"mode": "selfcheck", "ts": datetime.now(timezone.utc).isoformat(), "results": rows}
     (HERE / "results").mkdir(exist_ok=True)

@@ -21,8 +21,8 @@ ROLES = {
     "architect": {"model": "sonnet", "tools": ["Read", "Grep", "Glob"], "schema": "plan"},
     "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": "dev_report"},
     "tester": {"model": "sonnet", "tools": ["Read", "Bash", "Grep", "Glob"], "schema": "test_report"},
-    "reviewer": {"model": "haiku", "tools": ["Read"], "schema": None},
     "smoke": {"model": "haiku", "tools": ["Bash"], "schema": None},   # live smoke test only
+    "reviewer": {"model": "haiku", "tools": [], "schema": "proposals"},
 }
 
 # Per-task caps for Max 5x (assumption).
@@ -42,7 +42,7 @@ ROLE_LIMITS = {
     "architect": {"max_turns": 12, "timeout_s": 600},
     "developer": {"max_turns": 30, "timeout_s": 1200},
     "tester": {"max_turns": 25, "timeout_s": 900},
-    "reviewer": {"max_turns": 8, "timeout_s": 300},
+    "reviewer": {"max_turns": 3, "timeout_s": 300},
     "smoke": {"max_turns": 4, "timeout_s": 120},
 }
 
@@ -50,3 +50,8 @@ ROLE_LIMITS = {
 # one smoke call cost 19.6k. Most input is the fixed Claude Code context, so cost follows the NUMBER of calls.
 TOKENS_PER_CALL = 21_000
 FIX_MARGIN = 1.25            # reserve for fix loops when estimating a task before it starts
+
+# Phase 4: lessons
+LESSON_MAX_LINES = 60        # lessons.md stays short
+LESSON_RETRIEVE_K = 5        # lessons injected into one agent call
+REVIEW_MIN_LESSONS = 5       # the review step runs only when this many lessons wait (or --force)

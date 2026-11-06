@@ -21,7 +21,7 @@ input,select{background:var(--bg);color:var(--fg);border:1px solid var(--line);b
 details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
 </style></head><body>
 <header><h1>Agent Dashboard</h1>
-<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="alerts">Alerts</button></nav>
+<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="learning">Learning</button><button data-v="alerts">Alerts</button></nav>
 <span class="mut" id="stamp"></span></header>
 <main id="m"></main>
 <script>
@@ -149,7 +149,26 @@ async function alerts(){
   r.items.forEach(a=>c.append(el("div",{class:"alert",style:a.level==="warn"?"border-color:var(--warn)":""},(a.task_id?a.task_id+": ":"")+a.text)));
   m.append(c);
 }
-const views={overview,activity,messages,task,quality,approvals,usage,alerts};
+async function learning(){
+  const r=await get("/api/learning");m.replaceChildren();
+  m.append(el("div",{class:"card"},el("b",{},"Lessons"),el("div",{class:"mut"},"Inbox: "+r.inbox+" (a review needs "+r.need_for_review+"; run `orch.py review-lessons`). Approve proposals in the Approvals tab."),
+    ...(r.lessons.length?r.lessons.map(l=>el("div",{},l)):[el("div",{class:"mut"},"No lessons yet.")])));
+  const pc=el("div",{class:"card"},el("b",{},"Proposals ("+r.proposals.length+")"));
+  r.proposals.forEach(p=>{const d=el("details",{},el("summary",{},p.id+" — "+p.target+" — state: "+(p.state||"?")+", approval: "+(p.approval||"?")));
+    d.append(el("pre",{},(p.old_text?"- "+p.old_text+"\n":"")+"+ "+p.new_text+"\n\nWhy: "+p.rationale+"\nLessons: "+p.source_lessons.join(", ")+(p.reasons?"\nReverted: "+p.reasons.join("; "):"")+(p.error?"\nError: "+p.error:"")));pc.append(d);});
+  if(!r.proposals.length)pc.append(el("div",{class:"mut"},"None."));m.append(pc);
+  const cmp=r.comparison;
+  if(cmp){const c=el("div",{class:"card"},el("b",{},"Eval comparison: "+cmp.before+" → "+cmp.after),
+      el("div",{},"passed "+cmp.pass_before+" → "+cmp.pass_after+", tokens "+cmp.tokens_before+" → "+cmp.tokens_after+" ("+cmp.token_change_pct+"%)"),
+      el("div",{class:cmp.regressions.length?"bad":"ok"},cmp.regressions.length?"REGRESSIONS: "+cmp.regressions.join(", "):"No regressions"));
+    const tb=el("table",{},el("tr",{},...["Task","Before","After","Fix loops b/a"].map(h=>el("th",{},h))));
+    cmp.rows.forEach(x=>tb.append(el("tr",{},el("td",{},x.id),el("td",{class:x.before?"ok":"bad"},String(x.before)),el("td",{class:x.after?"ok":"bad"},String(x.after)),el("td",{},x.fix_before+"/"+x.fix_after))));
+    c.append(tb);m.append(c);}
+  const rt=el("table",{},el("tr",{},...["Run","Passed","Tokens","Fix loops"].map(h=>el("th",{},h))));
+  r.eval_runs.forEach(x=>rt.append(el("tr",{},el("td",{},x.label+" ("+(x.ts||"").slice(0,16)+")"),el("td",{},x.passed+"/"+x.total),el("td",{},x.tokens),el("td",{},x.fix_loops))));
+  m.append(el("div",{class:"card"},el("b",{},"Real eval runs"),r.eval_runs.length?rt:el("div",{class:"mut"},"None yet. Run `python evals/run_evals.py real --label baseline --yes`.")));
+}
+const views={overview,activity,messages,task,quality,approvals,usage,learning,alerts};
 async function tick(){try{const ap=await get("/api/approvals");const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view]();document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
 tick();setInterval(()=>{if(!document.querySelector("details[open]")&&!document.activeElement.matches?.("input"))tick();},2500);

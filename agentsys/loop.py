@@ -16,7 +16,7 @@ import hashlib
 import json
 import subprocess
 
-from . import approvals, billing_guard, config, control, logger, runner, schema, semantics, tasks
+from . import approvals, billing_guard, config, control, logger, memory, runner, schema, semantics, tasks
 from .ledger import BudgetExceeded, Ledger, Window, estimate_task_units
 
 QA_DIR = "qa_tests"
@@ -53,11 +53,16 @@ def _git(ws, *args, check=False):
     return subprocess.run(cmd, cwd=ws, capture_output=True, text=True, check=check)
 
 
-def ensure_workspace(tdir):
+def ensure_workspace(tdir, seed=None):
+    """Create the task workspace (a git repo). `seed` = folder copied in BEFORE the first commit (eval fixtures)."""
     ws = tdir / "workspace"
     if not (ws / ".git").exists():
         ws.mkdir(parents=True, exist_ok=True)
+        if seed:
+            import shutil
+            shutil.copytree(seed, ws, dirs_exist_ok=True)
         _git(ws, "init", "-q", check=True)
+        _git(ws, "add", "-A")
         _git(ws, "commit", "-q", "--allow-empty", "-m", "workspace start", check=True)
     return ws
 
@@ -108,7 +113,7 @@ def _item_hash(wi):
     return hashlib.sha256(json.dumps(wi, sort_keys=True).encode()).hexdigest()[:12]
 
 
-def run_task(task_id, requirements, *, backend, title=None, env=None, settings_paths=None, limits=None):
+def run_task(task_id, requirements, *, backend, title=None, env=None, settings_paths=None, limits=None, seed=None):
     """Run or resume one task. Returns {"status", "state", "message", "report"}."""
     logger.safe_task_id(task_id)
     tdir = config.home() / "tasks" / task_id
@@ -116,7 +121,7 @@ def run_task(task_id, requirements, *, backend, title=None, env=None, settings_p
     schema.validate("requirements", requirements)   # bad input is the caller's bug: raise, do not log a task failure
     title = title or requirements["goal"][:60]
     try:
-        _run(task_id, tdir, requirements, backend, title, env, settings_paths, limits)
+        _run(task_id, tdir, requirements, backend, title, env, settings_paths, limits, seed)
         status, state, msg = "ready_for_review", "review", "All work items and the final regression passed. Waiting for your review."
     except runner.UsageLimitReached as e:
         status, state, msg = "paused", "paused", f"Usage limit reached. State saved. Run the same command again later. ({e})"
@@ -161,12 +166,12 @@ def _status_report(tdir, task_id, status, msg):
     return p
 
 
-def _run(task_id, tdir, req, backend, title, env, settings_paths, limits):
+def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=None):
     ac, cons = _ids(req)
     blocking = [u["question"] for u in req["unknowns"] if u["blocking"]]
     if blocking:                                    # no agent call needed to know a human must answer
         raise NeedsInput("Blocking unknowns in the requirement: " + " | ".join(blocking))
-    ws = ensure_workspace(tdir)
+    ws = ensure_workspace(tdir, seed)
     prog = _load_progress(tdir)
     save = lambda: _save(tdir / "progress.json", prog)
     _save(tdir / "requirements.json", req)
@@ -183,6 +188,9 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits):
             raise Stopped("stopped by user")
         prog["runs"] += 1
         save()
+        lessons = memory.retrieve(role, req["goal"])          # <= 5 short hints, plain text
+        if lessons:
+            payload = dict(payload, lessons=lessons)
         res = runner.run_agent(role, payload, task_id=task_id, run_id=f"r{prog['runs']}", backend=backend, cwd=str(ws),
                                env=env, settings_paths=settings_paths, limits=limits, post_process=post_process)
         if not res.ok:

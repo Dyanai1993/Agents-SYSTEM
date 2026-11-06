@@ -1,0 +1,42 @@
+{
+ "title": "Shared memory, lessons, controlled improvement loop, real eval runner and gate",
+ "branch": "claude/phase4-memory-evals",
+ "context": "A personal multi-agent engineering system on Claude Code with a Max subscription login. A Python state machine runs one agent at a time (Architect, Developer, Tester) with schemas plus code rules, fix loops, re-plans, checkpoints, approval gates and a local dashboard. Phase 4 adds: lessons extracted by code from finished tasks, a short deduplicated lessons.md with keyword retrieval injected into agent calls, a Haiku reviewer that proposes small prompt changes, a human approval per proposal, a git-branch apply step with free checks, a real eval runner (8 benchmark tasks), and an eval gate that reverts a change when a before/after run shows a regression.",
+ "claims": [
+  "Lessons are built from facts (budget, reports, events) with fixed templates. Model-written text enters a lesson only as a sanitized 60-character detail",
+  "lessons.md is capped at 60 lines, deduplicated by key, and at most 5 lessons are injected per agent call, only for the matching role or 'all'",
+  "The reviewer runs on Haiku, only with 5+ lessons (or --force), and its proposals are filtered by code: allowed targets only, old_text exactly once, protected wording kept, source lessons must exist",
+  "No proposal is applied without a human approval file; apply works on a NEW branch, runs unit tests and eval selfcheck first, and never touches main or pushes",
+  "A proposal that fails free checks is reverted and its branch deleted",
+  "The eval gate reverts the branch on any regression, any missing task, or more than 25% token growth; otherwise it keeps the branch for a human PR",
+  "evals/run_evals.py real needs --yes, runs sequentially, stops at a token budget, and records pass, fix loops, calls, tokens and seconds per task",
+  "The dashboard Learning view shows lessons, proposals with state, real eval runs and a before/after comparison with regressions"
+ ],
+ "files": ["agentsys/memory.py", "agentsys/learning.py", "agentsys/loop.py", "agentsys/orchestrator.py", "agentsys/dashboard_data.py", "evals/run_evals.py", ".claude/agents/reviewer.md", ".claude/agents/tester.md", ".claude/agents/developer.md", ".claude/agents/architect.md", "schemas/lesson.schema.json", "schemas/proposals.schema.json", "dashboard/index.html", "scripts/orch.py", "scripts/gen_review_prompt.py", "tests/test_phase4.py"],
+ "known_weaknesses": [
+  "The reviewer prompt, lesson injection and the real eval runner were NEVER run against a real model. Proposal quality from Haiku is unknown",
+  "LLM runs are noisy. The gate compares ONE before run with ONE after run, so a regression can be luck and an improvement can be luck. The 25% token threshold is arbitrary",
+  "apply() runs only free checks (unit tests, selfcheck). They prove nothing broke; they do not measure whether the new rule helps",
+  "Lessons are an injection path into future prompts. Mitigations: templates, a sanitized 60-character detail, a schema pattern forbidding newlines/backticks/braces, and DATA framing in the prompts. Is that enough?",
+  "The PROTECTED-wording check is a crude substring test; a proposal could weaken a rule without containing those words",
+  "Eval runs use an isolated home, so they measure prompt changes but never lesson injection",
+  "A real eval run costs about 8 x 90k tokens (estimate from 3 live tasks). Its share of a Max 5x window is unknown",
+  "Lessons are extracted only by orchestrator.process(); tasks run with scripts/run_task.py record nothing",
+  "Proposal approvals use pseudo task ids ('lesson-P-1'); the Approvals tab shows them without a task title",
+  "This branch is stacked on the open PR #6 (tester coverage retry)"
+ ],
+ "verify": [
+  "python -m unittest discover -s tests -t . -v",
+  "python evals/run_evals.py selfcheck",
+  "python evals/run_evals.py compare A.json B.json   (with two saved result files; no quota)",
+  "python scripts/gen_prompt_review.py   (prompts and schemas in sync)"
+ ],
+ "questions": [
+  "Can a lesson or a proposal carry an instruction into a future prompt that the schema, sanitizer and DATA framing do not stop?",
+  "Can a proposal change a file outside the allowed targets, via path tricks, symlinks, or an old_text that spans files?",
+  "Can apply() leave the repo on the wrong branch, dirty, or with a half-applied change after a crash? Check every exit path",
+  "Is a single before/after eval run a defensible gate? What is the cheapest change that makes it more trustworthy (repeat runs, per-task thresholds, paired comparison)?",
+  "Does anything in the eval runner or learning code spend quota without --yes, loop on calls, or bypass the billing guard and the budget caps?",
+  "Which metric would show that the improvement loop actually improves anything, and is it recorded?"
+ ]
+}

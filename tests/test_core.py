@@ -150,7 +150,7 @@ class RunnerTests(TmpHome):
                        "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'none'}))\n"
                        "print(json.dumps({'type':'result','is_error':False,'result':json.dumps({'ok':1}),"
                        "'num_turns':2,'usage':{'input_tokens':10,'output_tokens':5}}))\n")
-        r = runner.run_agent("reviewer", {"a": 1}, task_id="t3", backend=runner.CliBackend(), env=env, settings_paths=[])
+        r = runner.run_agent("smoke", {"a": 1}, task_id="t3", backend=runner.CliBackend(), env=env, settings_paths=[])
         self.assertTrue(r.ok); self.assertEqual(r.output, {"ok": 1}); self.assertEqual(r.api_key_source, "none")
 
     def test_cli_backend_records_tool_log(self):
@@ -159,7 +159,7 @@ class RunnerTests(TmpHome):
             "print(json.dumps({'type':'assistant','message':{'content':[{'type':'tool_use','id':'t1','name':'Bash','input':{'command':'pytest -q'}}]}}))\n"
             "print(json.dumps({'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':'t1','content':[{'type':'text','text':'3 passed'}],'is_error':False}]}}))\n"
             "print(json.dumps({'type':'result','is_error':False,'result':'{}','usage':{}}))\n")
-        r = runner.run_agent("reviewer", {}, task_id="t6", backend=runner.CliBackend(), env=env, settings_paths=[])
+        r = runner.run_agent("smoke", {}, task_id="t6", backend=runner.CliBackend(), env=env, settings_paths=[])
         self.assertEqual(r.tool_log, [{"tool": "Bash", "command": "pytest -q", "output": "3 passed", "is_error": False}])
 
     def test_cli_backend_detects_usage_limit(self):

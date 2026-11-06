@@ -42,3 +42,15 @@ Bad agent output -> `error` event, result `ok=False`, orchestrator decides. Wron
 - Dashboard writes only two things: approval decisions and control files. POSTs need `X-Agentsys: 1`, JSON, and a localhost Host/Origin.
 - Security, integrate and deploy states are logged as `skipped` until a specialist exists (Phase 5).
 - A usage-limit pause stores `resume_after = now + 5h` (assumption: no official reset time is available).
+
+## Phase 4 additions
+```
+ task ends -> memory.extract_lessons (facts -> templated lessons, no LLM) -> memory/inbox/*.json -> memory/lessons.md (<= 60 lines)
+ every agent call <- memory.retrieve(role, goal)  (<= 5 plain-text hints, labelled as data in the prompts)
+
+ orch.py review-lessons -> reviewer (Haiku) -> proposals (code filters targets, exact old_text, protected wording)
+   -> approval request (gate "lesson") -> human decision file
+   -> learning.apply: NEW branch + exact edit + unit tests + eval selfcheck  (fail => revert, delete branch)
+   -> evals real (before / after)  -> learning.gate: regression | missing task | +25% tokens => delete branch, else keep for a human PR
+```
+Known limit: one before/after run is noisy. See `docs/reviews/phase4-review-prompt.md`.

@@ -12,9 +12,37 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import approvals, config, intake, logger, loop, schema, tasks
+from . import approvals, config, intake, logger, loop, memory, schema, tasks
 
 RESET_GUESS_S = 5 * 3600     # (assumption) when a usage limit hits, retry after this long
+LOCK_STALE_S = 2 * 3600      # a lock older than this belongs to a dead run
+
+
+class TaskBusy(RuntimeError):
+    """Another process is advancing this task right now."""
+
+
+class _Lock:
+    def __init__(self, task_id):
+        self.path = _qdir() / f"{task_id}.lock"
+
+    def __enter__(self):
+        import os, time
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                return self
+            except FileExistsError:
+                if time.time() - self.path.stat().st_mtime > LOCK_STALE_S:
+                    self.path.unlink(missing_ok=True)        # stale: the owner died
+                    continue
+                raise TaskBusy(f"task is being processed by another run ({self.path.name})")
+        raise TaskBusy("could not take the task lock")
+
+    def __exit__(self, *exc):
+        self.path.unlink(missing_ok=True)
 
 
 def _qdir():
@@ -90,7 +118,12 @@ def deliver(task_id, target_repo=None):
 
 
 def process(task_id, *, backend, env=None, settings_paths=None):
-    """Advance one task as far as it can go without a human. Returns the updated queue entry."""
+    """Advance one task as far as it can go without a human. Returns the updated queue entry. Raises TaskBusy if locked."""
+    with _Lock(task_id):
+        return _process(task_id, backend=backend, env=env, settings_paths=settings_paths)
+
+
+def _process(task_id, *, backend, env=None, settings_paths=None):
     entry = load_entry(task_id)
     if entry is None:
         raise KeyError(task_id)
@@ -117,6 +150,11 @@ def process(task_id, *, backend, env=None, settings_paths=None):
 
     # ---- core loop (resumes from progress.json)
     res = loop.run_task(task_id, req, backend=backend, title=entry["title"], **kw)
+    if res["status"] != "paused":
+        try:
+            memory.extract_lessons(task_id)           # facts -> lessons, no LLM; never breaks the run
+        except Exception as e:
+            logger.log_event(task_id, "orchestrator", "alert", f"lesson extraction failed: {e}"[:200], status="error")
     if res["status"] == "paused":
         return finish("paused", res["message"], resume_after=_now_plus(RESET_GUESS_S) if "limit" in res["message"].lower() else None)
     if res["status"] != "ready_for_review":

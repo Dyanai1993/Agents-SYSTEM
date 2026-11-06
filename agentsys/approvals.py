@@ -78,7 +78,11 @@ def decide(approval_id, decision, note=""):
         raise ApprovalError("already decided")
     doc = {"id": approval_id, "decision": decision, "decided_at": logger.now(), "note": note[:500]}
     schema.validate("approval_decision", doc)
-    (_dir("decided") / f"{approval_id}.json").write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    try:                                         # exclusive create: of two simultaneous deciders only one wins
+        with open(_dir("decided") / f"{approval_id}.json", "x", encoding="utf-8") as f:
+            f.write(json.dumps(doc, indent=2))
+    except FileExistsError:
+        raise ApprovalError("already decided")
     logger.log_event(req["task_id"], "human", "approval", f"{req['gate']} {decision}", status="ok", payload=doc)
     return doc
 
