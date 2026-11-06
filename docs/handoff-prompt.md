@@ -1,7 +1,7 @@
 # Handoff prompt: continue the Agents-SYSTEM project in another session
 
 Paste everything below the line into a new Claude Code session opened in the repository folder.
-Last updated: 2026-11-06 (session 2). Keep this file current: update it at the end of every work session.
+Last updated: 2026-11-06 (session 2, continued). Keep this file current: update it at the end of every work session.
 
 ---
 
@@ -39,7 +39,7 @@ Open or unmerged (a stack; merge in this order only after the second external re
 2. PR #7 `claude/phase4-memory-evals`: lessons, reviewer proposals, eval gate, real eval runner, review fixes (guard on the real working directory, `--tools`, streaming init check, content-bound approvals, valid paired eval gate, process-tree kill). Stacked on #6.
 3. `claude/calibration-restricted-tools` (on #7): `TOKENS_PER_CALL` 8k, token cap 200k.
 4. `claude/clean-deliveries` (on #7): workspace `.gitignore`, tester scratch files outside the workspace, word-boundary titles.
-5. `claude/fix-timeout-and-retry` (on clean-deliveries, now at `1573229`, pushed): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches, plus three more fixes from session 2 below. 199 tests pass on Windows (2 skipped, symlink tests - expected).
+5. `claude/fix-timeout-and-retry` (on clean-deliveries, now at `c9e9aef`, pushed): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches, plus everything from session 2 below. 209 tests pass on Windows (3 skipped: 2 symlink tests + 1 POSIX-only process-group test - all expected on this machine).
 
 Live evidence so far: smoke test OK (tools restricted to Bash, no MCP, subscription credential). Tasks T-0001..T-0003, T-0020, T-0021, T-0022 reached review; T-0021 and T-0022 approved and delivered. Clean task cost: about 27k tokens for 5 calls (about 5.5k per call) with restricted tools, was 86k with default tools. T-0010 needed the retry and timeout fixes.
 NEVER run live yet: a fix loop, a re-plan, the Haiku lesson reviewer, lesson injection, the eval gate (the real eval *runner* itself has now run live twice, see below), Opus approval, the SDK backend (it has no tool log: it fails closed).
@@ -56,12 +56,19 @@ T-0022 (BOM-handling CSV tool) ran the *whole* pipeline live for the first time:
 ### Session 2: real eval baseline run (on `claude/fix-timeout-and-retry`, NOT `main` - `main` doesn't have the Phase 4 `real` mode yet)
 `python evals/run_evals.py real --label baseline --yes`: 6/8 passed, 148,400 tokens actual (estimate was 720k - far cheaper in practice). Saved at `evals/results/real-baseline-1793966265.json`. The 2 failures: `02-api-endpoint` hit the known evidence-matching strictness (tester batched python one-liners in one bash call, like T-0001 before it - not a new bug); `06-cli-tool` was the CRLF bug above (fixed; not re-run yet to confirm 7 or 8/8 - that costs more usage, your call).
 
-## 5. Open items for me (ask me for the results) - session-1 items are now CLOSED
-All of session 1's open items (T-0021 approved + delivered clean, T-0022 run with `--target-repo` and delivered, the CSV rule decided and recorded in `docs/review-response.md`) are done. Carried forward:
+### Session 2: second external review of phase 4 - verdict "do not ship", all 12 findings real, all fixed (commit `c9e9aef`)
+Review done at `3a1c2ff` (the regenerated `docs/reviews/phase4-review-prompt.md`, pointing at this branch). Every finding was checked against the code (most reproduced in a new test) and fixed; none was refused. One more real bug (missing `complete`/`git_dirty` keys silently bypassing the eval gate) was found while fixing finding 4. Full table in `docs/review-response.md` ("Second external review of phase 4"). The two most serious, in case you only read one line each:
+- A `Ledger` held across the whole work-item loop snapshotted `calls`/`tokens_est` at loop start; saving it on a fix loop or replan (`record_fix_loop`/`record_replan`) overwrote real spend recorded in between back to that stale snapshot - budget tracking could silently under-report usage on every fix loop.
+- `orch.py retry --answer` added a constraint but never invalidated `final_done` or the merge approval: a delivery failure answered-and-retried could go straight back to "ready for review" with ZERO agent calls, never checking the new constraint, reusing a stale approval made for different content.
+Also fixed: two `_cleanup()` bugs in the lesson-learning path that could delete a user's unrelated uncommitted work or someone else's same-named branch; `--resume` on the eval runner could silently reuse old checkpoints after switching commits and tag them with the new one; `protect_config` could leave a config leak staged (not just untracked); both backends now fail closed on a MISSING init message, not only a bad one (SdkBackend's check is code-level only, **not verified against a real `claude-agent-sdk` install** - it isn't installed here); the evidence-matching rule had a backwards substring check that let a trivial real command back an arbitrarily longer fabricated claim; a prompt-proposal's "Rules section only" check only looked at where the edit started, not where it ended, so it could silently rewrite Safety; intake had no budget-exception handling and could crash into a permanently stuck "queued" task; `deliver()` is now idempotent (journaled) and cleans up a failed `git am` instead of leaving the target repo on a broken branch; `_kill_tree` now signals the process GROUP by its numeric id instead of looking it up through a child process that might already be gone.
+Still open (the review flagged these as needing real redesign, not a quick fix): one noisy before/after eval run is still the gate's only evidence; the evidence rule can still false-reject an honestly-run command with different quoting (seen live in T-0022's own eval baseline, `02-api-endpoint` - not worse than before, just not fixed); `SdkBackend` is still unverified live and still fails closed via the missing tool log regardless.
+209 tests pass (was 204 before this round; added tests in `test_phase4.py`, `test_phase3.py`, `test_loop.py`, `test_review_fixes.py`).
+
+## 5. Open items for me (ask me for the results) - sessions 1 and the first round of session 2 are now CLOSED
 - Decide whether to re-run the real eval baseline (now that 06-cli-tool is fixed) to get a clean pass rate, or leave the 6/8 result as the recorded baseline and move on. Costs more usage either way.
-- Second external review of phase 4: `docs/reviews/phase4-review-prompt.md`. Fix only real findings, add a test per fix, record them in `docs/review-response.md`, regenerate the prompt. Feed it the 3 session-2 bugs too if the review hasn't started yet.
+- The second review's fixes above are NOT yet re-reviewed. `docs/reviews/phase4-review-prompt.md` still reflects the FIRST round (commit `3a1c2ff`) - regenerate it (`python scripts/gen_review_prompt.py 4`, after updating `docs/reviews/phase4.json`) before sending it for a third round, if you want one.
 - T-0010 lives in an old temporary sandbox clone; it can stay undecided.
-- You are waiting on your own decision to approve Phase 4 before Phase 5 starts (your words: "נחכה לאישור 4").
+- You are waiting on your own decision to approve Phase 4 before Phase 5 starts (your words: "נחכה לאישור 4"). Nothing above should be read as "therefore approve it" - that decision, and whether a third review round is worth the cost, is yours.
 
 ## 6. How a phase ends (docs/process.md)
 Tests green (Linux and Windows), docs updated, then `docs/reviews/phase<N>.json` (claims, files, honest weak points, questions) and `python scripts/gen_review_prompt.py <N>`, which writes a review-only prompt with direct repository links. I give it to an independent reviewer who must not change files. You make all changes.
