@@ -29,7 +29,7 @@ class Ledger:
                 "calls": 0, "call_cap": self.caps["call_cap"],
                 "fix_loops": 0, "fix_cap": self.caps["fix_cap"],
                 "replans": 0, "replan_cap": self.caps["replan_cap"],
-                "timeout_s": self.caps["timeout_s"],
+                "timeout_s": self.caps["timeout_s"], "token_cap": self.caps.get("token_cap"),
                 "tokens_est": 0, "units": 0.0,
                 "by_model": {}, "by_agent": {}, "limit_hits": [],
             }
@@ -47,6 +47,9 @@ class Ledger:
             raise BudgetExceeded(f"call cap {d['call_cap']} reached")
         if time.time() - d["started_epoch"] > d["timeout_s"]:
             raise BudgetExceeded(f"task timeout {d['timeout_s']}s reached")
+        cap = d.get("token_cap")
+        if cap is not None and d["tokens_est"] >= cap:
+            raise BudgetExceeded(f"token cap {cap} reached ({d['tokens_est']} used)")
 
     def record_call(self, agent, model, tokens):
         d = self.data

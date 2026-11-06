@@ -1,5 +1,6 @@
 """Read-only data layer for the dashboard. Never calls an LLM. Tolerates bad lines."""
 import json
+from pathlib import Path
 
 from . import config, logger
 from .ledger import Window
@@ -185,3 +186,37 @@ def alerts_view():
         items.append({"level": "bad" if e["status"] in ("blocked", "error") else "warn", "task_id": e["task_id"],
                       "text": f"{e['ts'][11:19]} {e['agent']}: {e['summary']}"})
     return {"items": items}
+
+
+def learning_view():
+    from . import approvals, memory
+    base = config.home() / "memory"
+    props = []
+    pdir = base / "proposals"
+    for p in (sorted(pdir.glob("P-*.json")) if pdir.is_dir() else []):
+        if p.name.endswith(".state.json"):
+            continue
+        doc = _json(p)
+        if not doc:
+            continue
+        st = _json(pdir / f"{doc['id']}.state.json") or {}
+        props.append(dict(doc, state=st.get("state"), branch=st.get("branch"), reasons=st.get("reasons"), error=st.get("error"),
+                          comparison=st.get("comparison"), approval=approvals.status(f"lesson-{doc['id']}-lesson-1")))
+    results = []
+    rdir = Path(__file__).resolve().parent.parent / "evals" / "results"
+    files = sorted(rdir.glob("real-*.json"), key=lambda f: f.stat().st_mtime)[-6:] if rdir.is_dir() else []
+    for f in files:
+        r = _json(f)
+        if r:
+            rows = r["results"]
+            results.append({"file": f.name, "label": r.get("label"), "ts": r.get("ts"), "passed": sum(x["passed"] for x in rows),
+                            "total": len(rows), "tokens": sum(x["tokens"] for x in rows), "fix_loops": sum(x.get("fix_loops", 0) for x in rows), "rows": rows})
+    comparison = None
+    if len(results) >= 2 and sorted(x["id"] for x in results[-2]["rows"]) == sorted(x["id"] for x in results[-1]["rows"]) and results[-2]["label"] != results[-1]["label"]:
+        from . import learning
+        a, b = _json(files[-2]), _json(files[-1])
+        comparison = dict(learning.compare_results(a, b), before=results[-2]["label"], after=results[-1]["label"])
+    lessons_md = base / "lessons.md"
+    return {"inbox": len(memory.inbox_lessons()), "need_for_review": config.REVIEW_MIN_LESSONS,
+            "lessons": lessons_md.read_text(encoding="utf-8").splitlines()[2:] if lessons_md.exists() else [],
+            "proposals": props[::-1], "eval_runs": results[::-1], "comparison": comparison}

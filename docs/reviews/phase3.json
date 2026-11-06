@@ -1,0 +1,53 @@
+{
+ "title": "Orchestrator, approval gates, scheduler, dashboard actions",
+ "context": "A personal multi-agent engineering system on Claude Code with a Max subscription login. A Python state machine runs one agent at a time (Architect, Developer, Tester) through a core loop with fix loops, re-plans and checkpoints. Phase 3 added intake, a queue and scheduler, a merge approval gate that delivers patch files or a new branch, an Opus approval gate, pause/stop control files, and a local dashboard with Approvals, Usage and Alerts views that can write approval decisions and control files. (Note: the branch also contains the late Phase 3 hardening: task lock and exclusive decision files.)",
+ "claims": [
+  "orchestrator.process() is idempotent: re-running it resumes from files and costs nothing while waiting for a human",
+  "Approving a merge never merges into main, never pushes, and never touches a target repo with uncommitted changes",
+  "run_agent(model='opus') raises until a human decision file for that task exists",
+  "Pause and stop are honored before every agent call and a pause survives scheduler runs",
+  "The scheduler advances exactly one task per call, in priority order, and refuses new tasks when the usage window is nearly used",
+  "Dashboard POSTs are rejected without the X-Agentsys header, JSON content type and a localhost Host/Origin",
+  "Decisions are final: an approval cannot be decided twice"
+ ],
+ "files": [
+  "agentsys/orchestrator.py",
+  "agentsys/scheduler.py",
+  "agentsys/approvals.py",
+  "agentsys/control.py",
+  "agentsys/actions.py",
+  "agentsys/intake.py",
+  "agentsys/loop.py",
+  "agentsys/dashboard_data.py",
+  "dashboard/server.py",
+  "dashboard/index.html",
+  ".claude/agents/orchestrator.md",
+  "tests/test_phase3.py",
+  "docs/architecture.md"
+ ],
+ "known_weaknesses": [
+  "A per-task lock file (O_EXCL, stale after 2 hours) and an exclusive-create decision file were added at the end of the phase. They are NEW and lightly tested: look for races, stale-lock takeover problems, and crash-while-locked behaviour",
+  "The intake prompt and the scheduler were never run against a real model; only the core loop was run live",
+  "A usage-limit pause uses resume_after = now + 5 hours, which is a guess, not an official reset time",
+  "needs_input tasks must be resubmitted: there is no in-place answer flow",
+  "Only merge and opus gates are wired. delete, send, spend, credentials gates exist only as names; they are enforced by not granting tools",
+  "Dashboard has no authentication; it relies on 127.0.0.1 binding plus header/Host checks",
+  "git am delivery to a target repo assumes the patches apply on the target tree; the workspace is a separate repo with its own root commit",
+  "Window size constants are guesses; the estimate uses 21k tokens per call from only three live tasks"
+ ],
+ "verify": [
+  "python -m unittest discover -s tests -t . -v",
+  "python evals/run_evals.py selfcheck",
+  "python -m agentsys.billing_guard",
+  "python scripts/gen_prompt_review.py (prompts and schemas still in sync)"
+ ],
+ "questions": [
+  "Can an approval or control file be forged or replayed through the dashboard or by a local web page?",
+  "Can a task be delivered without a human decision file, by any path (resume, scheduler, rejected then approved, deleted files)?",
+  "What happens if the process is killed between delivering patches and marking the task done?",
+  "Is there any path where the scheduler calls agents in parallel or in a loop without a cap?",
+  "Does anything write secrets or full environment dumps into logs, payloads or status reports?"
+ ],
+ "branch": "claude/phase4-memory-evals",
+ "pr": 5
+}

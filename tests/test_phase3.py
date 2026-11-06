@@ -249,6 +249,38 @@ class DashboardActionTests(TmpHome):
         self.assertTrue(any(i["task_id"] == "t2" and i["level"] == "bad" for i in dd.alerts_view()["items"]))
 
 
+class LockTests(TmpHome):
+    def test_second_run_on_the_same_task_is_refused(self):
+        orchestrator.submit("t1", requirements=REQ)
+        with orchestrator._Lock("t1"):
+            f = fb()
+            with self.assertRaises(orchestrator.TaskBusy):
+                proc("t1", f)
+            out = scheduler.run_next(backend=f, env={}, settings_paths=[])
+            self.assertIn("another run", out["skipped"]); self.assertEqual(f.calls, [])
+        self.assertFalse((self.home / "queue/t1.lock").exists())             # released
+
+    def test_lock_is_released_after_an_error_and_stale_locks_are_taken_over(self):
+        import os
+        orchestrator.submit("t1", requirements=REQ)
+        with self.assertRaises(RuntimeError):
+            with orchestrator._Lock("t1"):
+                raise RuntimeError("boom")
+        self.assertFalse((self.home / "queue/t1.lock").exists())
+        lock = self.home / "queue/t1.lock"; lock.write_text("999999")
+        old = time.time() - orchestrator.LOCK_STALE_S - 10
+        os.utime(lock, (old, old))
+        with orchestrator._Lock("t1"):
+            pass
+
+    def test_simultaneous_decisions_only_one_wins(self):
+        a = approvals.request("t1", "merge", "c")
+        approvals.decide(a["id"], "approved")
+        with self.assertRaises(approvals.ApprovalError):
+            approvals.decide(a["id"], "rejected")
+        self.assertEqual(approvals.status(a["id"]), "approved")
+
+
 class EmptyDeliveryTest(TmpHome):
     def test_task_that_changed_nothing_cannot_be_delivered(self):
         orchestrator.submit("t1", requirements=REQ)

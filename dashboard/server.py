@@ -44,6 +44,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, d.approvals_view())
             if u.path == "/api/usage":
                 return self._send(200, d.usage_view())
+            if u.path == "/api/learning":
+                return self._send(200, d.learning_view())
             if u.path == "/api/alerts":
                 return self._send(200, d.alerts_view())
             if u.path == "/api/payload":
