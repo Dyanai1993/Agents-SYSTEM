@@ -110,14 +110,33 @@ def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
     75%, while the actual verdict word was never checked against reality at all. Requiring the match to
     reach the evidence's own end means whatever is claimed LAST - the part doing the actual claiming - must
     be an exact, unbroken match; only text BEFORE it may be fuzzy/absent from the real output.
+
+    Found live (first real Phase 5 task, T-0023): a check covering TWO scenarios ("no argument and
+    nonexistent file...") legitimately quoted two non-adjacent real excerpts from two different labelled
+    sections of one batched script, joined by a single "...". Both excerpts were real and accurate, but
+    stripping "..." without keeping the gap it marks forced the whole thing to be ONE contiguous run -
+    which it genuinely is not, since real, unrelated output sits between the two kept pieces. Rejecting
+    this punished an honest, accurate report. Fixed below: if the single-run match fails, fall back to
+    treating each "..."-delimited piece as its own exact, in-order excerpt - not a fuzzy ratio match (a
+    kept piece is a direct quote, not a paraphrase), so a genuinely wrong value in ANY piece - including
+    the last one - is still caught exactly as before.
     """
     ev = _squash(re.sub(r"\.\.\.|\u2026", "", evidence or ""))      # '...' marks a cut, not content
     if len(ev) < MIN_EVIDENCE_CHARS or not outputs_squashed:
         return False
     m = difflib.SequenceMatcher(None, ev, outputs_squashed, autojunk=False).find_longest_match(0, len(ev), 0, len(outputs_squashed))
-    if m.a + m.size != len(ev):      # evidence has its own unmatched tail: the claimed payload itself differs
+    if m.a + m.size == len(ev) and m.size >= max(MIN_EVIDENCE_CHARS, MIN_SHARE * len(ev)):
+        return True
+    segments = [s for s in (_squash(p) for p in re.split(r"\.\.\.|\u2026", evidence or "")) if s]
+    if len(segments) < 2:
         return False
-    return m.size >= max(MIN_EVIDENCE_CHARS, MIN_SHARE * len(ev))
+    pos = 0
+    for seg in segments:
+        idx = outputs_squashed.find(seg, pos)
+        if idx == -1:
+            return False
+        pos = idx + len(seg)
+    return True
 
 
 def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:

@@ -492,6 +492,26 @@ class SemanticsTests(unittest.TestCase):
         wrong = report("pass", [_check("x", "pass", ["W1.1"], command='python -c "print(1)"', evidence="result: 'bad'")])
         self.assertTrue(semantics.evidence_errors(wrong, log, strict=True))
 
+    def test_evidence_split_by_dots_may_span_two_real_sections_in_order(self):
+        """Live (first real Phase 5 task, T-0023): a check covering two scenarios quoted two genuinely
+        non-adjacent real excerpts from two labelled sections of one batched script, joined by one "...".
+        Both pieces were real and accurate - rejecting this punished an honest report."""
+        log = [{"tool": "Bash", "command": "r", "output":
+                "F:\nusage: validate_emails.py FILE\nrc=2\nG:\nerror: cannot read /tmp/x/nope: [Errno 2] No such file\nrc=2"}]
+        honest = report("pass", [_check("x", "pass", ["W1.1"], command="r",
+                         evidence="usage: validate_emails.py FILE ... error: cannot read ... rc=2")])
+        self.assertEqual(semantics.evidence_errors(honest, log, strict=True), [])
+        # the LAST piece is still checked for real: a wrong final value (not genuinely in the output) is rejected
+        wrong_last = report("pass", [_check("x", "pass", ["W1.1"], command="r",
+                             evidence="usage: validate_emails.py FILE ... error: cannot read ... rc=99")])
+        self.assertTrue(semantics.evidence_errors(wrong_last, log, strict=True))
+        # pieces must appear in the CLAIMED order, not just anywhere: swapped order is rejected
+        swapped = report("pass", [_check("x", "pass", ["W1.1"], command="r",
+                          evidence="error: cannot read ... usage: validate_emails.py FILE ... rc=2")])
+        self.assertTrue(semantics.evidence_errors(swapped, log, strict=True))
+        # the overall length gate still applies: splitting into many trivial pieces cannot dodge it
+        self.assertFalse(semantics._evidence_in_output("a...b...c", semantics._squash(log[0]["output"])))
+
     def test_command_matching_ignores_whitespace(self):
         r = report("pass", [_check("a", "pass", ["W1.1"], command="python  -m   unittest")])
         self.assertEqual(semantics.evidence_errors(r, [{"tool": "Bash", "command": "python -m unittest"}], strict=True), [])
