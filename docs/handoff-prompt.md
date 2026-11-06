@@ -1,7 +1,7 @@
 # Handoff prompt: continue the Agents-SYSTEM project in another session
 
 Paste everything below the line into a new Claude Code session opened in the repository folder.
-Last updated: 2026-11-06 (session 2, continued - fourth review round fixed). Keep this file current: update it at the end of every work session.
+Last updated: 2026-11-06 (session 2, continued - fourth review round fixed, SdkBackend confirmed unusable, Phase 5 approved). Keep this file current: update it at the end of every work session.
 
 ---
 
@@ -92,13 +92,22 @@ Comprehensive round, re-verifying rounds 1-3 as well as finding new issues. All 
 - `dashboard/server.py` sent no `X-Frame-Options`/`frame-ancestors` - the approval-handling dashboard could be embedded in an attacker's iframe for clickjacking. Both headers added; a new test spins up the real server and checks a live HTTP response.
 241 tests pass (was 221; 3 skipped - 2 new symlink tests plus the pre-existing one, all for the same reason: this dev machine can't create symlinks without elevated privileges).
 
-Still open, as in every prior round: one noisy before/after eval run as the gate's only evidence; the evidence rule's false-rejection risk for an honestly-run command with different quoting/escaping than what gets logged; `SdkBackend`'s actual query path remains unverified against a real login (only `ClaudeAgentOptions` construction was checked).
+Still open, as in every prior round: one noisy before/after eval run as the gate's only evidence; `SdkBackend`'s actual query path remains unverified against a real login (only `ClaudeAgentOptions` construction was checked).
 
-## 5. Open items for me (ask me for the results) - sessions 1 and the first three rounds of session 2 are now CLOSED
-- Decide whether to request a FIFTH review round, and whether it should be comprehensive again or can now be incremental given four rounds have each found real bugs - this needs your call, not mine to make alone.
+### Session 2: closed two of the three standing follow-ups; `SdkBackend` confirmed broken for real tasks (2026-11-06)
+You asked to close the open items instead of requesting a fifth review. Two were pure code fixes, done and pushed (commit `526c19e`): `semantics.norm()`/`_squash()` now drop quote characters (`'`/`"`/`` ` ``) before comparing - a command or output paraphrased with a different quote style than what was actually logged used to break both the command-match and the evidence-in-output match outright; and `runner.get_backend()`'s own fallback now defaults to `"cli"` instead of the unverified `"sdk"`, matching every real entry point.
+You then ran `python scripts/live_smoke.py --backend sdk` yourself (this cloud session re-confirmed its own `python -m agentsys.billing_guard` still fails here - `ANTHROPIC_BASE_URL` is set - so it genuinely cannot run live commands). Result, read from `logs/smoke-1793988330.jsonl`: subscription credential confirmed (`apiKeySource='none'`), the agent answered, `--tools`/`--strict-mcp-config` restriction both worked - but the tool log had ZERO entries despite the agent running `echo agentsys-smoke`. `SdkBackend.run()` never populates `AgentResult.tool_log` at all. This is now a CONFIRMED finding, not a suspicion: evidence verification cannot work on `SdkBackend` as built. Decided not to build SDK tool-log capture (a real feature addition for a backend nothing uses by default) - `SdkBackend` is documented in its own docstring and in `docs/review-response.md` as unsupported for real tasks, not scheduled for more work.
+Remaining open item: the noisy single before/after eval run as the gate's only evidence - needs you to choose N (runs per side) before it can be built, since it multiplies real subscription usage per learning-proposal gate (~150k tokens/run observed live).
+243 tests pass.
+
+## 5. Open items for me (ask me for the results) - sessions 1 and the four review rounds of session 2 are now CLOSED
+You decided NOT to request a fifth review round and approved moving on to Phase 5 (specialists) - Phase 4 stays formally unreviewed beyond round 4, a known, accepted tradeoff, not a clean bill of health.
+- If you want the eval gate (`learning.gate`) to stop relying on a single noisy before/after run, decide N (eval runs per side) first - it multiplies real subscription usage per learning-proposal gate (~150k tokens/run observed live; N=2 per side ~ 600k tokens for one gate decision). Not built without that number from you.
 - Decide whether to re-run the real eval baseline again (now that both `02-api-endpoint` prompt bugs are fixed) to get a clean pass rate, or leave the 6/8 result as the recorded baseline. Costs more usage either way; not urgent since both fixes are deterministic, not variance-dependent.
 - T-0010 lives in an old temporary sandbox clone; it can stay undecided.
-- You are still waiting on your own decision to approve Phase 4 before Phase 5 starts. Nothing above should be read as "therefore approve it" - after four rounds each finding 10-14 real bugs, I would NOT approve yet without at least one clean round. That is still your call, not mine.
+- The PR stack (#6, #7, calibration-restricted-tools, clean-deliveries, fix-timeout-and-retry) is still unmerged into `main`, each stacked on the last. Decide when/whether to merge it, in order - I will not merge without your explicit approval.
+- I offered to write a PowerShell loop script (`orch.py run-next` + sleep, respecting the existing caps) so the build loop can run unattended ON YOUR MACHINE, where your real login is active - not answered yet. Do not confuse this with ever weakening `billing_guard`: that stays fail-closed no matter what, forever - the way to get autonomy is running the loop where the guard legitimately passes (your machine), never by touching the guard itself.
+- Phase 5 (specialists): security/integrate/deploy are logged as `skipped` today, no agent exists for any of them. My recommendation, not yet started: build a Security specialist first (reviews a diff before the merge gate on concrete vectors - injection, leaked secrets, file permissions) - this is the exact area that needed 4 rounds of manual external review to catch real bugs, so automating a first pass there has the clearest immediate value. Waiting on you to confirm this or name a different real task to justify the first specialist.
 
 ## 6. How a phase ends (docs/process.md)
 Tests green (Linux and Windows), docs updated, then `docs/reviews/phase<N>.json` (claims, files, honest weak points, questions) and `python scripts/gen_review_prompt.py <N>`, which writes a review-only prompt with direct repository links. I give it to an independent reviewer who must not change files. You make all changes.
@@ -110,9 +119,9 @@ Tests green (Linux and Windows), docs updated, then `docs/reviews/phase<N>.json`
 - Docs: `docs/billing-assumptions.md`, `architecture.md`, `calibration.md`, `review-response.md`, `process.md`.
 
 ## 8. Known weak points (do not hide them)
-Single before/after eval run is noisy. Proposal filters do not judge meaning: my approval of the exact diff is the control. No OS-level sandbox yet (Bash cannot be made read-only by a tool list). Gates for delete, send, spend and credentials are enforced only by not granting tools (hooks are Phase 6). Window-size constants are guesses. `needs_input` answers go through `orch.py retry --answer`.
+Single before/after eval run is noisy. Proposal filters do not judge meaning: my approval of the exact diff is the control. No OS-level sandbox yet (Bash cannot be made read-only by a tool list). Gates for delete, send, spend and credentials are enforced only by not granting tools (hooks are Phase 6). Window-size constants are guesses. `needs_input` answers go through `orch.py retry --answer`. `SdkBackend` is confirmed (live-verified, not just suspected) unable to support evidence verification - no tool log is ever built; `CliBackend` is the only backend to use for a real task.
 
 ## 9. What to do first
 1. Read `docs/process.md`, `docs/review-response.md`, `docs/calibration.md`, `docs/architecture.md`. Check out `claude/fix-timeout-and-retry` and run the tests.
 2. Ask me, in Hebrew, for the open results in section 5 (one short list).
-3. Do not start Phase 5 until I approve phase 4. When I do, propose which specialist the next real task justifies, with your recommendation, before writing code.
+3. Phase 5 is approved and started (see section 5) - propose which specialist the next real task justifies, with your recommendation, before writing code. My own recommendation left for you: Security specialist first.

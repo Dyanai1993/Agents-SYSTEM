@@ -365,7 +365,13 @@ def build_sdk_options(sdk, *, system_prompt, tools, model, limits, cwd, env):
 
 class SdkBackend:
     """Claude Agent SDK. NOT exercised live by unit tests (needs a live login); options construction IS
-    tested against a real installed SDK when available (optional dependency)."""
+    tested against a real installed SDK when available (optional dependency).
+
+    Confirmed unsupported for real tasks (live-verified 2026-11-06, logs/smoke-1793988330.jsonl): the
+    subscription login, --tools restriction and --strict-mcp-config all work correctly, but run() below
+    never populates AgentResult.tool_log, so a real Bash call the agent made showed 0 tool log entries -
+    evidence verification (semantics.evidence_errors) cannot work on this backend as built. No real entry
+    point uses it by default (see get_backend()); do not use it for a real task."""
     name = "sdk"
 
     def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
