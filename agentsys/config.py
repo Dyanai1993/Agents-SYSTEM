@@ -26,7 +26,7 @@ ROLES = {
 }
 
 # Per-task caps for Max 5x (assumption).
-TASK_CAPS = {"call_cap": 30, "fix_cap": 3, "replan_cap": 2, "timeout_s": 45 * 60, "token_cap": 450_000}   # token cap ~5x a clean task (86k)
+TASK_CAPS = {"call_cap": 30, "fix_cap": 3, "replan_cap": 2, "timeout_s": 45 * 60, "token_cap": 200_000}   # ~7x a clean task (28k, restricted tools)
 
 # Usage weights per token by model (assumption).
 MODEL_WEIGHT = {"haiku": 0.3, "sonnet": 1.0, "opus": 5.0}
@@ -46,9 +46,9 @@ ROLE_LIMITS = {
     "smoke": {"max_turns": 4, "timeout_s": 120},
 }
 
-# Measured on live runs (Max 5x, 2026-11): a small task of 4 agent calls cost 85.8k-86.8k tokens,
-# one smoke call cost 19.6k. Most input is the fixed Claude Code context, so cost follows the NUMBER of calls.
-TOKENS_PER_CALL = 21_000
+# Measured on live runs (Max 5x, 2026-11). Default tools: a small task of 4 agent calls cost 85.8k-86.8k tokens (about 21k per call).
+# With --tools restricted per role (T-0020): 5 calls, 27.8k tokens (about 5.6k per call). Cost still follows the NUMBER of calls.
+TOKENS_PER_CALL = 8_000     # measured 5.6k average per call on a live task (T-0020) with restricted tools; margin for bigger tasks
 FIX_MARGIN = 1.25            # reserve for fix loops when estimating a task before it starts
 
 # Phase 4: lessons

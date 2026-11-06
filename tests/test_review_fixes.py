@@ -102,7 +102,7 @@ class TokenCapTests(TmpHome):
         self.assertIn("token cap", cm.exception.reason)
 
     def test_default_cap_exists(self):
-        self.assertGreater(ledger.Ledger("t2").data["token_cap"], 86_000)
+        self.assertGreater(ledger.Ledger("t2").data["token_cap"], 27_828 * 5)       # well above a clean task, still a hard cap
 
 
 class EvalRunTests(TmpHome):

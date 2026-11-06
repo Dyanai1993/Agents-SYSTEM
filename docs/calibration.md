@@ -8,6 +8,7 @@ Source: `tasks/*/budget.json` from the owner's runs. Token counts are the SDK/CL
 | T-0001 wc (blocked once, then resumed) | 5 | 108,508 | 0 | includes one tester call rejected by the evidence check |
 | T-0002 wc (clean) | 4 | 86,826 | 0 | architect 1, developer 1, tester 2 (item + final) |
 | T-0003 slugify | 4 | 85,771 | 0 | first-try pass: the fix loop was NOT exercised live |
+| **T-0020 wc, restricted tools** (intake from plain text) | 5 | **27,828** | 0 | orchestrator/Haiku 1, architect 1, developer 1, tester 2. First live intake. About 5.6k per call |
 
 ## What it means
 - A clean one-item task costs about **86k tokens**, i.e. about **21k per call**. Most of it is fixed context, so cost follows the number of calls, not the size of the code.
@@ -25,3 +26,10 @@ Same smoke call (1 Haiku call, 1 Bash command): **19,557 input tokens with the d
 The default tool definitions were about two thirds of the fixed context. The smoke role has only 1 tool; the Developer has 6, the Tester 4,
 the Architect 3, so the saving per real call will be smaller. **`TOKENS_PER_CALL` (21k) is therefore probably too high now.**
 It is NOT changed until a full task runs with the new flags (about 4 calls): then compare with the 86k per clean task above.
+
+
+## Result: restricted tools cut a task to about a third (T-0020, 2026-11-06)
+Same kind of task as T-0002 (wc): **27,828 tokens for 5 calls** against 86,826 for 4 calls. Per call: about 5.6k against 21k.
+`TOKENS_PER_CALL` is now 8,000 (a margin above the measured 5.6k, because one task is one data point and a larger task reads more files).
+`token_cap` per task is 200k (it was 450k, about 5x the old cost). Window-size constants are still guesses: with about 28k per task they matter much less for now.
+Still unmeasured: a task with fix loops, a multi-item plan, and Opus.
