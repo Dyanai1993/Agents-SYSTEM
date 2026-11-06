@@ -426,7 +426,13 @@ BACKENDS = {"fake": FakeBackend, "cli": CliBackend, "sdk": SdkBackend}
 
 
 def get_backend(name=None):
-    name = name or os.environ.get("AGENTSYS_BACKEND", "sdk")
+    # Still open (noted since the second review): SdkBackend has never been exercised live (needs a real
+    # login) and builds no tool log, so it fails closed on every evidence check by design. Every real entry
+    # point (orch.py, run_task.py, evals/run_evals.py, live_smoke.py) explicitly defaults its own --backend
+    # to "cli", so this fallback is never actually hit by them - but it used to silently default to the
+    # unverified "sdk" for any FUTURE direct caller that forgets to pass one. Defaulting here to "cli" too
+    # keeps that consistent instead of being a footgun waiting for a new call site.
+    name = name or os.environ.get("AGENTSYS_BACKEND", "cli")
     return BACKENDS[name]()
 
 

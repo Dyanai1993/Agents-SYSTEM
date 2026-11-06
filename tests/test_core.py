@@ -113,6 +113,18 @@ class LedgerTests(TmpHome):
 
 
 class RunnerTests(TmpHome):
+    def test_get_backend_defaults_to_cli_not_the_unverified_sdk_backend(self):
+        """Still open since the second review: SdkBackend has never run live and fails closed on every
+        evidence check by design (no tool log). Every real entry point explicitly passes --backend cli, but
+        get_backend()'s OWN fallback used to be "sdk" - a footgun for any future direct caller that forgets
+        to pass one, silently handing it the unverified backend instead of the one actually exercised live."""
+        old = os.environ.pop("AGENTSYS_BACKEND", None)
+        try:
+            self.assertIsInstance(runner.get_backend(), runner.CliBackend)
+        finally:
+            if old is not None:
+                os.environ["AGENTSYS_BACKEND"] = old
+
     def test_happy_path_logs_and_validates(self):
         r = run("architect", runner.FakeBackend({"architect": PLAN}))
         self.assertTrue(r.ok); self.assertEqual(r.output["complexity"], "trivial")

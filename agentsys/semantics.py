@@ -7,8 +7,18 @@ import os
 import re
 
 
+# Still open (noted since the second review): an honestly-run command or its real output can be quoted
+# with different characters than what a model writes when paraphrasing it back in a report (single vs
+# double vs backtick, e.g. `python -c 'print(1)'` vs `python -c "print(1)"`), which used to break both the
+# command-match and the evidence-in-output match outright. Quote characters carry no command/output
+# semantics of their own here (unlike whitespace or path separators, which can also legitimately differ -
+# see _squash below), so dropping all of them before comparing closes this without weakening what the
+# checks actually verify: a fabricated claim still has to match everything else in the real text.
+_QUOTE_CHARS = str.maketrans("", "", "'\"`")
+
+
 def norm(cmd: str) -> str:
-    return re.sub(r"\s+", " ", (cmd or "").strip())
+    return re.sub(r"\s+", " ", (cmd or "").strip()).translate(_QUOTE_CHARS)
 
 
 # ------------------------------------------------------------------ plan
@@ -70,13 +80,15 @@ _PATH_TOKEN = re.compile(r"\S*[/\\]\S*|\b[A-Za-z]:\S*")
 
 
 def _squash(text: str) -> str:
-    """Drop whitespace and mask path-like tokens.
+    """Drop whitespace, mask path-like tokens, and drop quote characters.
 
     Git Bash on Windows rewrites /tmp/f.txt to C:/Users/.../f.txt in the output, so a quoted
     path never equals the real one. Both sides are masked the same way: the numbers and words
-    around the path must still match, the path itself does not.
+    around the path must still match, the path itself does not. Quote characters ('/"/`) are
+    dropped too: a model paraphrasing a real command or output can freely swap one quote style
+    for another with no change in meaning, which used to break an exact-match comparison.
     """
-    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or ""))
+    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or "")).translate(_QUOTE_CHARS)
 
 
 MIN_SHARE = 0.75

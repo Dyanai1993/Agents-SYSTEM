@@ -437,6 +437,19 @@ class SemanticsTests(unittest.TestCase):
         log3 = [{"tool": "Bash", "command": "python -m unittest", "output": "actual test_result: FAIL"}]  # a real prefix label too
         self.assertEqual(semantics.evidence_errors(honest, log3, strict=True), [])
 
+    def test_quote_style_does_not_break_an_honest_match(self):
+        """Still open since the second review: a model paraphrasing a real command or its output can freely
+        swap one quote character for another with no change in meaning (python -c 'print(1)' vs
+        python -c "print(1)"; result: 'ok' vs result: "ok") - this used to break BOTH the command-match
+        (exact substring, quotes included) and the evidence-in-output match outright, rejecting an honest,
+        accurately-paraphrased report as unsupported."""
+        log = [{"tool": "Bash", "command": "python -c 'print(1)'", "output": "result: \"ok\""}]
+        r = report("pass", [_check("x", "pass", ["W1.1"], command='python -c "print(1)"', evidence="result: 'ok'")])
+        self.assertEqual(semantics.evidence_errors(r, log, strict=True), [])
+        # the quote characters carry no meaning of their own: a genuinely different value is still caught
+        wrong = report("pass", [_check("x", "pass", ["W1.1"], command='python -c "print(1)"', evidence="result: 'bad'")])
+        self.assertTrue(semantics.evidence_errors(wrong, log, strict=True))
+
     def test_command_matching_ignores_whitespace(self):
         r = report("pass", [_check("a", "pass", ["W1.1"], command="python  -m   unittest")])
         self.assertEqual(semantics.evidence_errors(r, [{"tool": "Bash", "command": "python -m unittest"}], strict=True), [])
