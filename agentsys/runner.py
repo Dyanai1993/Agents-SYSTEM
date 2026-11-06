@@ -90,6 +90,12 @@ def extract_json(text: str):
 
 
 # ---------------------------------------------------------------- backends
+#  Phase 5 added a new mandatory call (security) at the end of every task. Defaulting it here, the same way
+# "tester" already gets special-cased just below for tool_logs, means a test FakeBackend built for something
+# else entirely does not also need to configure a security response just to reach "ready_for_review".
+_DEFAULT_FAKE_RESPONSE = {"security": {"verdict": "pass", "summary": "no findings", "findings": []}}
+
+
 class FakeBackend:
     """responses: role -> dict | str | Exception | callable(prompt)->dict|str."""
     name = "fake"
@@ -102,7 +108,7 @@ class FakeBackend:
 
     def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
         self.calls.append({"role": role, "prompt": prompt, "model": model})
-        r = self.responses.get(role, {})
+        r = self.responses.get(role, _DEFAULT_FAKE_RESPONSE.get(role, {}))
         if isinstance(r, list):          # scripted sequence: the last item repeats
             r = r.pop(0) if len(r) > 1 else r[0]
         if callable(r):

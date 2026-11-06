@@ -127,11 +127,28 @@ def _retry(task_id, answer=None):
     return entry
 
 
+def _security_summary(tdir):
+    # A high/critical finding already stopped the task before it could reach review (loop.py's
+    # security_call), so only low/medium findings - real but not blocking - can appear here. Surfaced to
+    # the human approving the merge instead of being silently dropped once they stop blocking anything.
+    p = tdir / "security_report.json"
+    if not p.exists():
+        return "Security review: no report (task predates Phase 5, or a prior error)."
+    rep = json.loads(p.read_text(encoding="utf-8"))
+    findings = rep.get("findings") or []
+    if not findings:
+        return "Security review: no findings."
+    lines = [f"- [{f['severity']}] {f['category']} in {f['file']}" + (f":{f['line']}" if f.get("line") else "") + f" - {f['description']}"
+             for f in findings]
+    return "Security review findings (none blocking):\n" + "\n".join(lines)
+
+
 def _merge_context(task_id, tdir):
     summary = (tdir / "summary.md").read_text(encoding="utf-8") if (tdir / "summary.md").exists() else ""
     ws = tdir / "workspace"
     stat = loop._git(ws, "diff", "--stat", f"{_base(ws)}..HEAD", "--", ".", *JUNK).stdout.strip()
-    return f"{summary}\nChanged files:\n{stat}\n\nApproving prepares patch files (and a branch `agentsys/{task_id}` if a target repo was given). Nothing is merged into main."
+    return (f"{summary}\nChanged files:\n{stat}\n\n{_security_summary(tdir)}\n\n"
+            f"Approving prepares patch files (and a branch `agentsys/{task_id}` if a target repo was given). Nothing is merged into main.")
 
 
 def _base(ws):
@@ -332,8 +349,10 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
     except RuntimeError as e:
         tasks.set_state(task_id, "blocked", title=entry["title"])
         return finish("blocked", f"delivery failed: {e}")
-    for gate_state in ("security", "integrate", "deploy"):
-        logger.log_event(task_id, "orchestrator", "state_change", f"{gate_state}: skipped (no specialist yet)", from_=gate_state, status="skipped")
+    # Phase 5: security now runs for real (loop.py, before this point ever gets reached - see
+    # security_call()). "integrate" and "deploy" were retired as separate specialists: integration code is
+    # just a normal work item for the developer, gated by network/credentials access rather than a role of
+    # its own (Phase 6); "deploy" is already this function's own job (git branch/patch delivery).
     tasks.set_state(task_id, "done", title=entry["title"])
     logger.log_event(task_id, "orchestrator", "decision", "delivered", payload=d)
     return finish("done", f"delivered: {d['patches_dir']}" + (f", branch {d['branch']}" if d["branch"] else ""), delivery=d)

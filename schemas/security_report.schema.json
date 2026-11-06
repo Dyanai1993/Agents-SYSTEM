@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "security_report.schema.json",
+  "title": "Security specialist report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "summary",
+    "findings"
+  ],
+  "properties": {
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "blocked"
+      ]
+    },
+    "verdict_reported": {
+      "enum": [
+        "pass",
+        "fail",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "category",
+          "file",
+          "description",
+          "evidence"
+        ],
+        "properties": {
+          "severity": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "e.g. command injection, prompt injection, secret leak, path traversal, unsafe deserialization, permission leak"
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Path relative to the workspace root"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 2000,
+            "description": "An exact quoted snippet from the named file. Checked against the real file content."
+          },
+          "recommendation": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "fail"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "findings": {
+            "contains": {
+              "properties": {
+                "severity": {
+                  "enum": [
+                    "high",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

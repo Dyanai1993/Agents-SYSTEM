@@ -1,7 +1,7 @@
 # Handoff prompt: continue the Agents-SYSTEM project in another session
 
 Paste everything below the line into a new Claude Code session opened in the repository folder.
-Last updated: 2026-11-06 (session 2, continued - fourth review round fixed, SdkBackend confirmed unusable, Phase 5 approved). Keep this file current: update it at the end of every work session.
+Last updated: 2026-11-06 (session 2, continued - fourth review round fixed, SdkBackend confirmed unusable, Phase 5 (security specialist) built, not yet run live or reviewed). Keep this file current: update it at the end of every work session.
 
 ---
 
@@ -30,7 +30,7 @@ You continue a project that another session built with me (the user). Read this 
 - `core.autocrlf=true` on my machine. Any new eval fixture (or other file with hand-counted bytes/lines/chars in a check) needs an entry in `.gitattributes` (`eol=lf`) or its golden values will be wrong by exactly the CRLF count - see the 06-cli-tool bug below.
 
 ## 4. Where things stand (2026-11-06)
-Phases: 1 foundation, 2 core loop, 3 orchestrator, 4 memory and eval gate are BUILT. Phase 4 is under external review and NOT approved. Phases 5 (specialists) and 6 (hardening) are not started.
+Phases: 1 foundation, 2 core loop, 3 orchestrator, 4 memory and eval gate, 5 security specialist are BUILT. Phase 4 went through 4 external review rounds (all findings fixed) but was never independently re-reviewed clean - you decided to move on rather than request a 5th round. Phase 5 has NOT been externally reviewed at all yet. Phase 6 (hardening) is not started.
 
 Merged into `main`: PR #1 (Windows test fix), #2 (phase 2), #3 (evidence matching), #4 (token counting, window check), #5 (phase 3: orchestrator, gates, scheduler).
 
@@ -39,7 +39,7 @@ Open or unmerged (a stack; merge in this order only after the second external re
 2. PR #7 `claude/phase4-memory-evals`: lessons, reviewer proposals, eval gate, real eval runner, review fixes (guard on the real working directory, `--tools`, streaming init check, content-bound approvals, valid paired eval gate, process-tree kill). Stacked on #6.
 3. `claude/calibration-restricted-tools` (on #7): `TOKENS_PER_CALL` 8k, token cap 200k.
 4. `claude/clean-deliveries` (on #7): workspace `.gitignore`, tester scratch files outside the workspace, word-boundary titles.
-5. `claude/fix-timeout-and-retry` (on clean-deliveries, now at `5e0280b`, pushed): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches, plus everything from session 2 below. 241 tests pass on Windows (3 skipped: symlink tests - expected on this machine; the POSIX orphan-process test now also runs and passes on Windows, see the third review below).
+5. `claude/fix-timeout-and-retry` (on clean-deliveries, now at `64f5a61`+Phase 5 commits, pushed): timeout clock restarts per run, `orch.py retry [--answer]`, build junk filtered from merge requests and patches, 4 rounds of review fixes, the Security specialist (Phase 5), plus everything from session 2 below. 252 tests pass on Windows (3 skipped: symlink tests - expected on this machine).
 
 Live evidence so far: smoke test OK (tools restricted to Bash, no MCP, subscription credential). Tasks T-0001..T-0003, T-0020, T-0021, T-0022 reached review; T-0021 and T-0022 approved and delivered. Clean task cost: about 27k tokens for 5 calls (about 5.5k per call) with restricted tools, was 86k with default tools. T-0010 needed the retry and timeout fixes.
 NEVER run live yet: a fix loop, a re-plan, the Haiku lesson reviewer, lesson injection, the eval gate (the real eval *runner* itself has now run live twice, see below), Opus approval, the SDK backend (it has no tool log: it fails closed).
@@ -100,6 +100,19 @@ You then ran `python scripts/live_smoke.py --backend sdk` yourself (this cloud s
 Remaining open item: the noisy single before/after eval run as the gate's only evidence - needs you to choose N (runs per side) before it can be built, since it multiplies real subscription usage per learning-proposal gate (~150k tokens/run observed live).
 243 tests pass.
 
+### Session 2: Phase 5 built - Security specialist, "integrate"/"deploy" retired as separate roles (2026-11-06)
+You asked to finish all planned phases with tests at each step, then asked what Phase 5 (specialists: security, integrate, deploy) should actually mean concretely. Discussed and agreed: "deploy" is already `orchestrator.deliver()`'s own job (branch/patch to a target repo) - no separate role needed. "Integrate" (calling external APIs) is just normal developer work; the real risk is network/credential ACCESS, which belongs to Phase 6's `credentials`/`spend` gates, not a new agent role. So Phase 5 narrowed to ONE real specialist: **security**.
+
+Built: a new `security` role (sonnet, Read/Bash/Grep/Glob, no Write/Edit - same tool set as tester) that runs once per task, after the final regression passes, on the whole finished workspace (`.claude/agents/security.md`, `schemas/security_report.schema.json`). It looks for concrete vectors only: command/shell injection, committed secrets, path traversal, treating external content as instructions, unsafe deserialization, permission/access leaks. Every high/critical finding must quote real text from the file it names (`semantics.security_evidence_errors`, reusing the same `norm()` quote/whitespace normalization built for the evidence-matching fix above) - a hallucinated finding referencing nonexistent code or a file is rejected, same fail-closed discipline as the tester's evidence checks. The verdict is DERIVED from finding severities in code, not trusted from the model (`semantics.derive_security_verdict`): any high/critical finding forces `fail`, mirroring how the tester's verdict is derived from its checks.
+
+Wiring (`agentsys/loop.py`, `agentsys/orchestrator.py`): a `fail` verdict stops the task exactly like a failed final regression (`StepFailed` -> `blocked`, a human decides, nothing reaches the merge gate with a confirmed vulnerability already in hand). A `blocked` verdict (the reviewer needs information only you have) raises `NeedsInput`. A clean result (no findings, or only low/medium ones) proceeds to the merge gate - but any findings, even non-blocking ones, are now shown in the merge approval context you read before approving (`orchestrator._merge_context` / `_security_summary`), so nothing is silently dropped once it stops blocking. Checkpointed the same way the final regression is (`progress.json`'s `security_done`), including being invalidated by the same requirement-hash-change trigger. `_load_progress()` now merges onto defaults instead of returning a raw `json.load()`, so an OLDER task's progress.json (missing this new key) resumes instead of crashing with `KeyError` - a latent bug that existed for every key ever added this way, not something new.
+
+Updated `agentsys/config.py` (new role + limits), `semantics.plan_errors`'s call-cap formula and `ledger.estimate_task_units` (both now count the extra security call), `schemas/task_state.schema.json` and `agentsys/dashboard_data.py`'s `MAIN_STATES` (added `security`, removed the never-used `integrate`/`deploy` task states - `deploy` stays as an `approval_request` GATE TYPE for Phase 6, a different and still-valid concept from the retired specialist role), `scripts/seed_demo.py` (was seeding a demo task into the now-removed `"deploy"` state), `docs/architecture.md` (new "Phase 5 additions" section), `README.md` status line, and regenerated `docs/agent-prompts-for-review.md` (`scripts/gen_prompt_review.py`, updated to include the security prompt/schema).
+
+`runner.FakeBackend` got a small addition for testability: an unconfigured "security" role now defaults to a trivial pass response (`_DEFAULT_FAKE_RESPONSE`), the same way "tester" already gets special-cased for tool_logs - otherwise every one of the ~50 existing happy-path tests across the whole suite would have needed updating just to reach `ready_for_review`. Real backends are unaffected.
+
+252 tests pass (was 243; 9 new: schema validation, evidence/verdict-derivation unit tests, and loop-level integration tests for fail/blocked/mutation-revert/merge-context-surfacing). **Not reviewed externally yet** - this is new, untested-by-a-human-reviewer code exactly like Phase 4 was before its first review round. **Not run live yet** either - everything above is FakeBackend-only.
+
 ## 5. Open items for me (ask me for the results) - sessions 1 and the four review rounds of session 2 are now CLOSED
 You decided NOT to request a fifth review round and approved moving on to Phase 5 (specialists) - Phase 4 stays formally unreviewed beyond round 4, a known, accepted tradeoff, not a clean bill of health.
 - If you want the eval gate (`learning.gate`) to stop relying on a single noisy before/after run, decide N (eval runs per side) first - it multiplies real subscription usage per learning-proposal gate (~150k tokens/run observed live; N=2 per side ~ 600k tokens for one gate decision). Not built without that number from you.
@@ -107,14 +120,15 @@ You decided NOT to request a fifth review round and approved moving on to Phase 
 - T-0010 lives in an old temporary sandbox clone; it can stay undecided.
 - The PR stack (#6, #7, calibration-restricted-tools, clean-deliveries, fix-timeout-and-retry) is still unmerged into `main`, each stacked on the last. Decide when/whether to merge it, in order - I will not merge without your explicit approval.
 - I offered to write a PowerShell loop script (`orch.py run-next` + sleep, respecting the existing caps) so the build loop can run unattended ON YOUR MACHINE, where your real login is active - not answered yet. Do not confuse this with ever weakening `billing_guard`: that stays fail-closed no matter what, forever - the way to get autonomy is running the loop where the guard legitimately passes (your machine), never by touching the guard itself.
-- Phase 5 (specialists): security/integrate/deploy are logged as `skipped` today, no agent exists for any of them. My recommendation, not yet started: build a Security specialist first (reviews a diff before the merge gate on concrete vectors - injection, leaked secrets, file permissions) - this is the exact area that needed 4 rounds of manual external review to catch real bugs, so automating a first pass there has the clearest immediate value. Waiting on you to confirm this or name a different real task to justify the first specialist.
+- Phase 5 is built (security specialist) but has NEVER run live and has NEVER been externally reviewed - decide whether to request a review round for it (comprehensive, or scoped to just the new code, now that the "re-verify everything every time" question has already been debated once for Phase 4) before or after a first live run. Either order is defensible; it is your call.
+- Once you approve a live Phase 5 run: submit a real task and watch the security step actually execute (`tasks/<id>/security_report.json`, the merge approval context). This is the first time any of this code touches a real model.
 
 ## 6. How a phase ends (docs/process.md)
 Tests green (Linux and Windows), docs updated, then `docs/reviews/phase<N>.json` (claims, files, honest weak points, questions) and `python scripts/gen_review_prompt.py <N>`, which writes a review-only prompt with direct repository links. I give it to an independent reviewer who must not change files. You make all changes.
 
 ## 7. Map of the code
 - `agentsys/`: `billing_guard.py`, `runner.py` (sdk/cli/fake backends, `run_agent`), `loop.py` (core loop, checkpoints, git policy), `semantics.py` (code rules: verdict derivation, tool-log evidence, plan checks), `orchestrator.py` (+ `scheduler.py`, `approvals.py`, `control.py`, `intake.py`), `memory.py`, `learning.py`, `ledger.py`, `logger.py`, `dashboard_data.py`, `actions.py`.
-- `.claude/agents/*.md`: architect, developer, tester, orchestrator (intake), reviewer prompts. `scripts/gen_prompt_review.py` regenerates `docs/agent-prompts-for-review.md`.
+- `.claude/agents/*.md`: architect, developer, tester, security, orchestrator (intake), reviewer prompts. `scripts/gen_prompt_review.py` regenerates `docs/agent-prompts-for-review.md`.
 - `schemas/`, `evals/` (8 tasks, `run_evals.py selfcheck|real|compare`), `dashboard/` (`python dashboard/server.py 8765`), `scripts/orch.py` (submit, run-next, status, pending, approve, reject, pause/stop/resume, retry, lessons, review-lessons, proposals, apply-proposal, recover-proposal, gate-proposal), `scripts/live_smoke.py`.
 - Docs: `docs/billing-assumptions.md`, `architecture.md`, `calibration.md`, `review-response.md`, `process.md`.
 
@@ -124,4 +138,4 @@ Single before/after eval run is noisy. Proposal filters do not judge meaning: my
 ## 9. What to do first
 1. Read `docs/process.md`, `docs/review-response.md`, `docs/calibration.md`, `docs/architecture.md`. Check out `claude/fix-timeout-and-retry` and run the tests.
 2. Ask me, in Hebrew, for the open results in section 5 (one short list).
-3. Phase 5 is approved and started (see section 5) - propose which specialist the next real task justifies, with your recommendation, before writing code. My own recommendation left for you: Security specialist first.
+3. Phase 5 (security specialist) is built but unreviewed and never run live - do not treat it as done. Follow `docs/process.md`'s end-of-phase ritual (tests green, docs updated - both already true) before asking me about a review round or a live run, in whichever order I pick.

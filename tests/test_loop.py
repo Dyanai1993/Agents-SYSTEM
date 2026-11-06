@@ -21,12 +21,12 @@ class LoopTests(TmpHome):
         fb = runner.FakeBackend({"architect": plan(2), "developer": DEV, "tester": t_pass})
         r = go("t1", fb)
         self.assertEqual(r["status"], "ready_for_review")
-        self.assertEqual(roles(fb), ["architect", "developer", "tester", "developer", "tester", "tester"])
+        self.assertEqual(roles(fb), ["architect", "developer", "tester", "developer", "tester", "tester", "security"])
         st = self.read("tasks/t1/state.json")
         self.assertEqual((st["state"], st["waiting_approval"]), ("review", True))
         for f in ("requirements.json", "plan.json", "dev_log.md", "test_report.json", "budget.json", "summary.md"):
             self.assertTrue((self.home / "tasks/t1" / f).exists(), f)
-        self.assertEqual(json.loads(fb.calls[-1]["prompt"])["work_item"]["id"], "FINAL")
+        self.assertEqual(json.loads(fb.calls[-2]["prompt"])["work_item"]["id"], "FINAL")   # last call is security
 
     def test_fix_loop_then_pass_and_report_forwarded(self):
         fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": [t_fail, t_pass]})
@@ -50,8 +50,8 @@ class LoopTests(TmpHome):
         req2 = dict(REQ, constraints=REQ["constraints"] + ["Clarification from the user: use argparse"])
         r2 = go("t1", fb2, req=req2)
         self.assertEqual(r2["status"], "ready_for_review")
-        self.assertEqual(roles(fb2), ["tester"])          # only a fresh FINAL regression; no work item rebuilt
-        self.assertEqual(json.loads(fb2.calls[-1]["prompt"])["work_item"]["id"], "FINAL")
+        self.assertEqual(roles(fb2), ["tester", "security"])   # a fresh FINAL regression and security review; no work item rebuilt
+        self.assertEqual(json.loads(fb2.calls[-2]["prompt"])["work_item"]["id"], "FINAL")   # last call is security
 
     def test_fix_cap_stops_and_asks(self):
         fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_fail})
@@ -198,6 +198,48 @@ class LoopTests(TmpHome):
         r = go("t1", fb)
         self.assertEqual(r["status"], "blocked"); self.assertIn("final regression failed", r["message"])
 
+    # ---------------------------------------------------------------- security review (Phase 5)
+    def test_a_high_severity_finding_blocks_before_review_is_ever_reached(self):
+        def dev(p):
+            (self.ws() / "app.py").write_text("API_KEY = 'sk-real-secret'\n"); return DEV
+        sec = {"verdict": "pass", "summary": "looks fine",   # under-reported on purpose: code derives the real verdict
+               "findings": [{"severity": "critical", "category": "secret leak", "file": "app.py",
+                             "description": "a real key is committed", "evidence": "API_KEY = 'sk-real-secret'"}]}
+        fb = runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass, "security": sec})
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "blocked")
+        self.assertIn("1 high/critical finding(s)", r["message"])
+        self.assertEqual(roles(fb), ["architect", "developer", "tester", "tester", "security"])   # never reached merge review
+
+    def test_security_blocked_verdict_asks_the_user(self):
+        sec = {"verdict": "blocked", "summary": "is this endpoint meant to be public?", "findings": []}
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass, "security": sec})
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "needs_input"); self.assertIn("is this endpoint meant to be public", r["message"])
+
+    def test_security_cannot_edit_the_workspace_either(self):
+        def security(prompt):
+            (self.ws() / "app.py").write_text("tampered by security")
+            return {"verdict": "pass", "summary": "ok", "findings": []}
+        def dev(p):
+            (self.ws() / "app.py").write_text("real"); return DEV
+        fb = runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass, "security": security})
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "blocked"); self.assertIn("security reviewer modified files", r["message"])
+        self.assertEqual((self.ws() / "app.py").read_text(), "real")
+
+    def test_security_report_is_saved_and_surfaced_at_the_merge_gate(self):
+        from agentsys import orchestrator
+        sec = {"verdict": "pass", "summary": "1 low finding", "findings": [
+            {"severity": "low", "category": "style", "file": "app.py", "description": "magic number", "evidence": "x = 1"}]}
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": t_pass, "security": sec})
+        self.assertEqual(go("t1", fb)["status"], "ready_for_review")
+        saved = self.read("tasks/t1/security_report.json")
+        self.assertEqual(saved["findings"][0]["category"], "style")
+        ctx = orchestrator._merge_context("t1", self.home / "tasks/t1")
+        self.assertIn("magic number", ctx)
+        self.assertIn("[low] style in app.py", ctx)
+
     def test_tokens_are_counted_once_per_call(self):
         """Live data: timeline.py showed 2x the real cost because message and agent_end both carried tokens."""
         from agentsys import dashboard_data as dd
@@ -222,7 +264,7 @@ class LoopTests(TmpHome):
         self.assertEqual(roles(fb), ["architect"])          # no build work started
 
     def test_estimate_follows_call_count(self):
-        self.assertEqual(ledger.estimate_task_units(1), 4 * config.TOKENS_PER_CALL * config.FIX_MARGIN)
+        self.assertEqual(ledger.estimate_task_units(1), 5 * config.TOKENS_PER_CALL * config.FIX_MARGIN)
         self.assertGreater(ledger.estimate_task_units(3), ledger.estimate_task_units(1))
 
     # ---------------------------------------------------------------- explicit block protocol
@@ -261,7 +303,7 @@ class LoopTests(TmpHome):
         self.assertEqual((prog["item"], prog["step"], sorted(prog["completed"])), (1, "dev", ["W1"]))
         fb2 = runner.FakeBackend({"developer": DEV, "tester": t_pass})
         self.assertEqual(go("t1", fb2)["status"], "ready_for_review")
-        self.assertEqual(roles(fb2), ["developer", "tester", "tester"])       # no architect, item 1 not rebuilt
+        self.assertEqual(roles(fb2), ["developer", "tester", "tester", "security"])   # no architect, item 1 not rebuilt
 
     def test_resume_after_crash_mid_step(self):
         class Crash(BaseException): pass
@@ -271,7 +313,7 @@ class LoopTests(TmpHome):
         self.assertEqual(self.read("tasks/t1/progress.json")["step"], "test")
         fb2 = runner.FakeBackend({"tester": t_pass})
         self.assertEqual(go("t1", fb2)["status"], "ready_for_review")
-        self.assertEqual(roles(fb2), ["tester", "tester"])
+        self.assertEqual(roles(fb2), ["tester", "tester", "security"])
 
     def test_billing_guard_blocks_the_loop(self):
         fb = runner.FakeBackend({"architect": plan(1)})
@@ -459,10 +501,68 @@ class SemanticsTests(unittest.TestCase):
         err = semantics.evidence_errors(r, [{"tool": "Bash", "command": "ls -la"}], strict=True)
         self.assertIn("ls -la", err[0])                                                           # and what was really run
 
+    # ---------------------------------------------------------------- security report (Phase 5)
+    def _ws(self, files):
+        import tempfile
+        from pathlib import Path
+        d = Path(tempfile.mkdtemp())
+        for name, content in files.items():
+            (d / name).parent.mkdir(parents=True, exist_ok=True)
+            (d / name).write_text(content, encoding="utf-8")
+        return d
+
+    def _finding(self, **kw):
+        f = {"severity": "high", "category": "command injection", "file": "app.py",
+             "description": "d", "evidence": "os.system(cmd)"}
+        f.update(kw)
+        return f
+
+    def test_security_evidence_must_be_a_real_quote_from_the_named_file(self):
+        ws = self._ws({"app.py": "import os\nos.system(cmd)\n"})
+        ok = {"verdict": "fail", "summary": "s", "findings": [self._finding()]}
+        self.assertEqual(semantics.security_evidence_errors(ok, ws), [])
+        hallucinated = {"verdict": "fail", "summary": "s", "findings": [self._finding(evidence="os.system(user_input)")]}
+        self.assertTrue(semantics.security_evidence_errors(hallucinated, ws))
+        missing_file = {"verdict": "fail", "summary": "s", "findings": [self._finding(file="nope.py")]}
+        self.assertTrue(semantics.security_evidence_errors(missing_file, ws))
+        # quote style differs from the real file - still accepted (same norm() used for commands/output)
+        requoted = {"verdict": "fail", "summary": "s", "findings": [self._finding(evidence='os.system("cmd")')]}
+        self.assertEqual(semantics.security_evidence_errors(requoted, ws), [])
+        # low/medium findings are not evidence-checked at all
+        low = {"verdict": "pass", "summary": "s", "findings": [self._finding(severity="low", evidence="invented, never in the file")]}
+        self.assertEqual(semantics.security_evidence_errors(low, ws), [])
+
+    def test_security_finding_cannot_escape_the_workspace(self):
+        ws = self._ws({"app.py": "x = 1\n"})
+        escaping = {"verdict": "fail", "summary": "s", "findings": [self._finding(file="../outside.py", evidence="secret = 1")]}
+        self.assertTrue(semantics.security_evidence_errors(escaping, ws))
+
+    def test_security_verdict_is_derived_from_severities_not_trusted(self):
+        ws = self._ws({"app.py": "os.system(cmd)\n"})
+        # under-stated: a high finding but reported "pass" - silently corrected, not a hard error
+        under = {"verdict": "pass", "summary": "s", "findings": [self._finding()]}
+        self.assertEqual(semantics.process_security_report(under, ws), [])
+        self.assertEqual(under["verdict"], "fail"); self.assertEqual(under["verdict_reported"], "pass")
+        # over-stated: reports "fail" but no finding is high/critical - nothing demonstrates the claim
+        over = {"verdict": "fail", "summary": "s", "findings": [self._finding(severity="low")]}
+        self.assertTrue(semantics.process_security_report(over, ws))
+        # honest pass, honest fail: both accepted as-is
+        clean = {"verdict": "pass", "summary": "s", "findings": []}
+        self.assertEqual(semantics.process_security_report(clean, ws), [])
+        honest_fail = {"verdict": "fail", "summary": "s", "findings": [self._finding()]}
+        self.assertEqual(semantics.process_security_report(honest_fail, ws), [])
+        # 'blocked' is a genuine self-report and is never overridden by the derived verdict
+        blocked = {"verdict": "blocked", "summary": "need to know if this is meant to be public", "findings": []}
+        self.assertEqual(semantics.process_security_report(blocked, ws), [])
+        self.assertEqual(blocked["verdict"], "blocked")
+        # but a 'blocked' report is still evidence-checked for any finding it DOES carry
+        blocked_fake = {"verdict": "blocked", "summary": "s", "findings": [self._finding(evidence="not in the file")]}
+        self.assertTrue(semantics.process_security_report(blocked_fake, ws))
+
 
 class PromptTests(TmpHome):
     def test_agent_files_match_config(self):
-        for role in ("architect", "developer", "tester"):
+        for role in ("architect", "developer", "tester", "security"):
             body, meta = prompts.load_role(role)
             self.assertEqual(meta["tools"], config.ROLES[role]["tools"], role)
             self.assertEqual(meta["model"], config.ROLES[role]["model"], role)
@@ -471,7 +571,7 @@ class PromptTests(TmpHome):
 
     def test_examples_inside_prompts_validate_against_schemas(self):
         """The JSON examples in the prompts must be valid replies. Keeps prompts and schemas in sync."""
-        for role, name in (("architect", "plan"), ("developer", "dev_report"), ("tester", "test_report")):
+        for role, name in (("architect", "plan"), ("developer", "dev_report"), ("tester", "test_report"), ("security", "security_report")):
             body = prompts.load_role(role)[0]
             blocks = re.findall(r"```\n(\{.*?\})\n```", body, re.S)
             self.assertTrue(blocks, role)

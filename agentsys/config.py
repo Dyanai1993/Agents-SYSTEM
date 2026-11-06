@@ -21,6 +21,7 @@ ROLES = {
     "architect": {"model": "sonnet", "tools": ["Read", "Grep", "Glob"], "schema": "plan"},
     "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": "dev_report"},
     "tester": {"model": "sonnet", "tools": ["Read", "Bash", "Grep", "Glob"], "schema": "test_report"},
+    "security": {"model": "sonnet", "tools": ["Read", "Bash", "Grep", "Glob"], "schema": "security_report"},
     "smoke": {"model": "haiku", "tools": ["Bash"], "schema": None},   # live smoke test only
     "reviewer": {"model": "haiku", "tools": [], "schema": "proposals"},
 }
@@ -42,6 +43,7 @@ ROLE_LIMITS = {
     "architect": {"max_turns": 12, "timeout_s": 600},
     "developer": {"max_turns": 30, "timeout_s": 1200},
     "tester": {"max_turns": 25, "timeout_s": 900},
+    "security": {"max_turns": 25, "timeout_s": 900},
     "reviewer": {"max_turns": 3, "timeout_s": 300},
     "smoke": {"max_turns": 4, "timeout_s": 120},
 }

@@ -190,11 +190,15 @@ def commit_changes(ws, message, only=None):
 
 
 def _load_progress(tdir):
+    # Merged over the defaults (not returned as-is) so a progress.json saved by an older version of this
+    # code - missing a key added since, like "security_done" in Phase 5 - resumes instead of a KeyError
+    # the first time that key is read.
+    defaults = {"plan_done": False, "item": 0, "step": "dev", "fix": 0, "last_report": None, "runs": 0, "replans": 0,
+                "reports": 0, "completed": {}, "final_done": False, "security_done": False, "last_files": [], "req_hash": None}
     p = tdir / "progress.json"
     if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
-    return {"plan_done": False, "item": 0, "step": "dev", "fix": 0, "last_report": None, "runs": 0, "replans": 0,
-            "reports": 0, "completed": {}, "final_done": False, "last_files": [], "req_hash": None}
+        defaults.update(json.loads(p.read_text(encoding="utf-8")))
+    return defaults
 
 
 def _ids(req):
@@ -273,7 +277,10 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         # The requirement changed since the last run that reached this point (e.g. `orch.py retry --answer`
         # added a constraint after the final regression had already passed). Completed work items were never
         # checked against the new requirement, so the final regression must run again before review.
+        # The security review looks at the same finished workspace, so new commits (a fresh final regression
+        # can trigger more developer work) invalidate it exactly the same way.
         prog["final_done"] = False
+        prog["security_done"] = False
         prog["req_hash"] = req_hash
     save = lambda: _save(tdir / "progress.json", prog)
     _save(tdir / "requirements.json", req)
@@ -363,6 +370,27 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
                          status="ok" if rep["verdict"] == "pass" else "error", payload={"verdict": rep["verdict"]})
         return rep
 
+    def security_call():
+        base = _git(ws, "rev-list", "--max-parents=0", "HEAD").stdout.split()[0]
+        files = _git(ws, "diff", "--name-only", f"{base}..HEAD").stdout.split()
+        payload = {"goal": req["goal"], "constraints": req_view["constraints"], "files_changed": files}
+
+        def post(res):
+            return semantics.process_security_report(res.output, ws)
+        rep = agent("security", payload, post_process=post)
+        protect_config(ws, task_id, "security")
+        mutated = [f for f in _changed(ws) if not _is_qa(f)]
+        if mutated:                                  # the security reviewer must not edit anything either
+            _git(ws, "checkout", "--", ".", f":(exclude){QA_DIR}")
+            _git(ws, "clean", "-fdq", "--", ".", f":(exclude){QA_DIR}")
+            logger.log_event(task_id, "orchestrator", "alert", "security reviewer changed files: reverted, report invalid",
+                             status="blocked", payload={"files": mutated})
+            raise StepFailed(f"security reviewer modified files {mutated}: report discarded")
+        _save(tdir / "security_report.json", rep)
+        logger.log_event(task_id, "security", "test_run", f"verdict {rep['verdict']} ({len(rep['findings'])} finding(s))",
+                         status="ok" if rep["verdict"] == "pass" else "error", payload={"verdict": rep["verdict"]})
+        return rep
+
     # ---- build / test / fix, one work item at a time
     # No long-lived Ledger here: a fresh instance is constructed right before each record_*() call below, so
     # it always loads the current on-disk budget.json. A Ledger held across agent() calls would snapshot
@@ -430,7 +458,24 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
             raise StepFailed(f"final regression failed: {rep['summary']}")
         prog["final_done"] = True
         save()
+
+    # ---- security review: once, on the whole finished workspace (Phase 5). Never auto-blocks on its own
+    # judgment calls ("blocked") or on low/medium findings - those are surfaced to the human at the merge
+    # gate instead (see orchestrator._merge_context). A demonstrated high/critical finding DOES stop here,
+    # the same way a failed final regression does: a human decides, rather than the task sailing on to ask
+    # for merge approval with a confirmed vulnerability already in hand.
+    if not prog["security_done"]:
+        tasks.set_state(task_id, "security", title=title, current_agent="security")
+        rep = security_call()
+        if rep["verdict"] == "blocked":
+            raise NeedsInput(f"security reviewer needs information to finish: {rep['summary']}")
+        if rep["verdict"] == "fail":
+            raise StepFailed(f"security review found {sum(1 for f in rep['findings'] if f['severity'] in ('high', 'critical'))} "
+                             f"high/critical finding(s): {rep['summary']}")
+        prog["security_done"] = True
+        save()
     tasks.set_state(task_id, "review", title=title, current_agent=None, waiting_approval=True)
     (tdir / "summary.md").write_text(
-        f"# {title}\n\n{plan['summary']}\n\nWork items: {len(plan['work_items'])}, all passed; final regression passed.\n"
+        f"# {title}\n\n{plan['summary']}\n\nWork items: {len(plan['work_items'])}, all passed; final regression passed; "
+        f"security review: no high/critical findings.\n"
         f"Workspace: `tasks/{task_id}/workspace` (git history = one commit per work item).\n", encoding="utf-8")

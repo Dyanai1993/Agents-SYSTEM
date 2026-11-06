@@ -40,7 +40,7 @@ Bad agent output -> `error` event, result `ok=False`, orchestrator decides. Wron
   The others are enforced today by not granting the tools; their hooks come in Phase 6.
 - Opus: `run_agent(model="opus")` raises until a human approves an `opus` request for that task.
 - Dashboard writes only two things: approval decisions and control files. POSTs need `X-Agentsys: 1`, JSON, and a localhost Host/Origin.
-- Security, integrate and deploy states are logged as `skipped` until a specialist exists (Phase 5).
+- Security, integrate and deploy states were logged as `skipped` until Phase 5 decided their scope (see below).
 - A usage-limit pause stores `resume_after = now + 5h` (assumption: no official reset time is available).
 
 ## Phase 4 additions
@@ -54,3 +54,19 @@ Bad agent output -> `error` event, result `ok=False`, orchestrator decides. Wron
    -> evals real (before / after)  -> learning.gate: regression | missing task | +25% tokens => delete branch, else keep for a human PR
 ```
 Known limit: one before/after run is noisy. See `docs/reviews/phase4-review-prompt.md`.
+
+## Phase 5 additions
+```
+ ... final regression (tester) passes -> security (sonnet, Read/Bash/Grep/Glob, no Write/Edit)
+      reviews the whole task diff for concrete vulnerabilities -> security_report.json
+      verdict derived from finding severities (code, not the model): any high/critical -> fail
+   fail  -> task blocked, same as a failed final regression (a human decides, nothing reaches merge review)
+   blocked (the reviewer needs information only a human has) -> needs_input
+   pass (zero findings, or only low/medium) -> proceeds to the merge gate; findings are shown in the
+      approval context the human reads before approving (agentsys/orchestrator._merge_context)
+```
+Specialists originally planned for this phase, decided down to one real role:
+- **security**: built (above) - the one specialist whose job (finding vulnerabilities) is genuinely different from writing or testing a feature.
+- **integrate**: retired as a separate role. Code that calls an external API is just a normal developer work item; the real risk is network/credential ACCESS, which belongs to Phase 6's `credentials`/`spend` approval gates, not a new agent.
+- **deploy**: retired as a separate role. `orchestrator.deliver()` already does the entire "get this into a real repo" job (branch/patch, idempotency journal). There is no other deployment target in this project to build a specialist for.
+`schemas/task_state.schema.json`'s `state` enum and `approval_request.schema.json`'s gate-type enum were updated to match: `integrate`/`deploy` removed as task states (nothing ever set them); `deploy` stays as a gate type (Phase 6, same category as `delete`/`send`/`spend`/`credentials` - a human-approval gate is still a reasonable future need even with no specialist agent behind it).

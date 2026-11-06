@@ -64,6 +64,23 @@ class SchemaTests(TmpHome):
         self.assertEqual(schema.errors_for("dev_report", {"status": "blocked", "summary": "s", "files_changed": [],
                                                            "blocking_kind": "environment", "blocking_reason": "no node"}), [])
 
+    def _sec(self, verdict="pass", findings=None):
+        return {"verdict": verdict, "summary": "s", "findings": findings or []}
+
+    def test_security_report_valid_cases(self):
+        self.assertEqual(schema.errors_for("security_report", self._sec()), [])
+        finding = {"severity": "high", "category": "command injection", "file": "app.py",
+                   "description": "unsanitized input reaches a shell command", "evidence": "os.system(cmd)"}
+        self.assertEqual(schema.errors_for("security_report", self._sec("fail", [finding])), [])
+
+    def test_security_fail_needs_a_high_or_critical_finding(self):
+        """A 'fail' verdict with only low/medium findings (or none) is not a real fail - the orchestrator
+        derives the verdict from severities anyway (semantics.derive_security_verdict), but the schema
+        itself should already refuse the obviously-inconsistent case."""
+        low = {"severity": "low", "category": "style", "file": "app.py", "description": "d", "evidence": "e"}
+        self.assertTrue(schema.errors_for("security_report", self._sec("fail", [low])))
+        self.assertTrue(schema.errors_for("security_report", self._sec("fail", [])))
+
 
 class LoggerTests(TmpHome):
     def test_event_with_payload_ref(self):

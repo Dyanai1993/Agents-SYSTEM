@@ -86,8 +86,8 @@ class Ledger:
 
 
 def estimate_task_units(n_items: int) -> float:
-    """Pre-task estimate in weighted tokens: architect + (developer + tester) per item + final regression."""
-    calls = 2 * n_items + 2
+    """Pre-task estimate in weighted tokens: architect + (developer + tester) per item + final regression + security."""
+    calls = 2 * n_items + 3
     return calls * config.TOKENS_PER_CALL * config.FIX_MARGIN * config.MODEL_WEIGHT["sonnet"]
 
 

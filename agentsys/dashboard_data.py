@@ -94,7 +94,7 @@ def payload(ref):
     return _json(config.home() / ref)
 
 
-MAIN_STATES = ["intake", "plan", "build", "test", "fix", "security", "integrate", "deploy", "review", "done"]
+MAIN_STATES = ["intake", "plan", "build", "test", "fix", "security", "review", "done"]
 
 
 def task_detail(task_id):

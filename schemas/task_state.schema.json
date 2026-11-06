@@ -27,8 +27,6 @@
         "test",
         "fix",
         "security",
-        "integrate",
-        "deploy",
         "review",
         "done",
         "blocked",

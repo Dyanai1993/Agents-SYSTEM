@@ -1,6 +1,6 @@
 # Multi-agent engineering system (personal use, subscription only)
 
-Status: **Phase 4 – Shared memory and improvement loop** (phases 1-3 built; phases 1-2 verified live). Next: specialists (Phase 5). Repository: https://github.com/Dyanai1993/Agents-SYSTEM
+Status: **Phase 5 – Security specialist** (phases 1-4 built; phases 1-2 verified live; phase 4 reviewed 4 rounds, not independently re-reviewed since). Next: Phase 6 (hardening). Repository: https://github.com/Dyanai1993/Agents-SYSTEM
 
 ## Rules that never change
 - Billing = your Claude Max login (`claude login`). No API key. `make guard` fails if any API-key / provider variable is set.

@@ -21,5 +21,5 @@ for tid, title in (("demo-1", "Add health endpoint"), ("demo-2", "Parse CSV repo
     tasks.set_state(tid, "test", current_agent="tester")
     runner.run_agent("tester", {"plan": "W1"}, task_id=tid, backend=fb)
 tasks.set_state("demo-1", "done", current_agent=None)
-tasks.set_state("demo-2", "deploy", current_agent=None, waiting_approval=True)
+tasks.set_state("demo-2", "review", current_agent=None, waiting_approval=True)
 print("demo data written under", os.environ.get("AGENTSYS_HOME", "project root"))

@@ -5,6 +5,7 @@ The prompts ask for these things. This module enforces them.
 import difflib
 import os
 import re
+from pathlib import Path
 
 
 # Still open (noted since the second review): an honestly-run command or its real output can be quoted
@@ -46,7 +47,7 @@ def plan_errors(plan: dict, ac_ids, call_cap: int) -> list:
         errs.append(f"requirement criterion {missing} is not covered by any work item")
     if plan["complexity"] == "trivial" and len(items) > 3:
         errs.append("a trivial plan has at most 3 work items")
-    need = 1 + 2 * len(items) + 1          # architect + (developer+tester) per item + final regression
+    need = 1 + 2 * len(items) + 1 + 1      # architect + (developer+tester) per item + final regression + security
     if need > call_cap:
         errs.append(f"plan needs at least {need} agent calls but the task cap is {call_cap}: split the task")
     return errs
@@ -188,4 +189,69 @@ def process_test_report(report, expected_ids, constraint_ids, tool_log):
     if reasons and derived == "blocked":
         report["summary"] = (report["summary"] + " | " + "; ".join(reasons))[:600]
         report["gaps"] = reasons
+    return []
+
+
+# ------------------------------------------------------------------ security report (Phase 5)
+def security_evidence_errors(report: dict, ws: Path) -> list:
+    """Every high/critical finding must quote real text from the file it names.
+
+    Unlike the tester, the security reviewer is not claiming a command ran with a given output - it is
+    claiming a line of code exists and means something. The matching check here is correspondingly simpler
+    than evidence_errors(): just confirm the quoted evidence is really, contiguously present in the named
+    file (whitespace- and quote-normalized via norm(), the same way a Bash command/output is), and that the
+    file is really inside the workspace. A hallucinated finding - a file that does not exist, or a quote
+    that is not really there - is rejected before it can send a human chasing something that is not real.
+    """
+    errs = []
+    ws = Path(ws).resolve()
+    for f in report["findings"]:
+        if f["severity"] not in ("high", "critical"):
+            continue
+        rel = f["file"]
+        try:
+            resolved = (ws / rel).resolve()
+            resolved.relative_to(ws)
+        except (ValueError, OSError):
+            errs.append(f"finding in {rel!r}: path escapes the workspace or cannot be resolved")
+            continue
+        if not resolved.is_file():
+            errs.append(f"finding in {rel!r}: no such file in the workspace")
+            continue
+        try:
+            content = norm(resolved.read_text(encoding="utf-8", errors="replace"))
+        except OSError as e:
+            errs.append(f"finding in {rel!r}: cannot read the file ({e})")
+            continue
+        ev = norm(f["evidence"])
+        if len(ev) < MIN_EVIDENCE_CHARS or ev not in content:
+            errs.append(f"finding in {rel!r}: evidence does not appear in the file. Claimed: {f['evidence'][:160]!r}")
+    return errs
+
+
+def derive_security_verdict(findings) -> str:
+    return "fail" if any(f["severity"] in ("high", "critical") for f in findings) else "pass"
+
+
+def process_security_report(report: dict, ws: Path) -> list:
+    """Used as run_agent post_process for the security role.
+
+    'blocked' is a genuine self-report (the reviewer needs information only a human has) and is never
+    overridden. Otherwise the verdict is derived from finding severities, the same way the tester's verdict
+    is derived from its checks: a report that under-states its own findings (says 'pass' despite a high/
+    critical one) is silently corrected, since the right data to decide is already there; one that over-
+    states them (says 'fail'/'blocked' with nothing high/critical) is a hard error asking it to reconsider,
+    since nothing demonstrates the claim.
+    """
+    errs = security_evidence_errors(report, ws)
+    reported = report["verdict"]
+    if reported == "blocked":
+        return errs
+    derived = derive_security_verdict(report["findings"])
+    if derived == "pass" and reported != "pass":
+        errs.append(f"reported verdict '{reported}' but no finding is high/critical severity: add the finding or report pass")
+    if errs:
+        return errs
+    report["verdict_reported"] = reported
+    report["verdict"] = derived
     return []
