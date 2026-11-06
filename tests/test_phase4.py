@@ -238,6 +238,11 @@ class ReviewTests(TmpHome):
             learning.apply("P-1")
 
     def test_symlink_targets_are_refused(self):
+        try:
+            probe = self.home / "probe_link"; probe.symlink_to(self.home)
+            probe.unlink()
+        except (OSError, NotImplementedError):
+            self.skipTest("this system does not allow creating symlinks (Windows needs Developer Mode or admin)")
         """Review finding 8: an allowed name that is a symlink must not let apply() write outside the repo."""
         outside = Path(tempfile.mkdtemp()) / "secret.md"
         outside.write_text("---\n---\n## Rules\n7. Last rule. ONLY this.\n")

@@ -19,3 +19,9 @@ Source: `tasks/*/budget.json` from the owner's runs. Token counts are the SDK/CL
 - Cost of a fix loop and of a re-plan (no live run needed one yet).
 - Opus calls, Haiku calls inside a task.
 - The real window size for Max 5x.
+
+## Update: restricting tools lowers the cost of a call (live smoke, 2026-11-06)
+Same smoke call (1 Haiku call, 1 Bash command): **19,557 input tokens with the default tool set, 5,909 with `--tools Bash --strict-mcp-config`**.
+The default tool definitions were about two thirds of the fixed context. The smoke role has only 1 tool; the Developer has 6, the Tester 4,
+the Architect 3, so the saving per real call will be smaller. **`TOKENS_PER_CALL` (21k) is therefore probably too high now.**
+It is NOT changed until a full task runs with the new flags (about 4 calls): then compare with the 86k per clean task above.

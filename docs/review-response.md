@@ -48,3 +48,10 @@ Tests for each fix: `tests/test_review_fixes.py` and `tests/test_phase4.py`.
 | - | Missing tests (empty eval, label reuse, dup ids, zero budget, interrupt, symlink, hash, checker timeout, hard-coded integration client, crash-safe lessons file) | **Added** | A hanging check now fails its task only. Eval 05 now requires real calls and rejects a hard-coded client |
 
 Still open: proposal quality from a real model, one noisy before/after run as a gate (the review's repeat-run suggestion is not built), the Windows suite, and live verification of the new CLI flags and streaming.
+
+## Windows run of the review fixes (live, 2026-11-06)
+- `live_smoke.py`: all 8 checks passed. Tools = ['Bash'], no MCP servers, subscription credential source, input tokens 19.6k -> 5.9k.
+- 180 tests ran on Windows: 3 problems, all fixed:
+  1. Symlink tests need a privilege Windows normally does not grant: they now skip with a clear reason where symlinks cannot be created.
+  2. **Real bug**: on timeout only the `.cmd` shim was killed; the real child kept the pipe open and the call returned after 30 s instead of 1 s. The CLI backend now kills the whole process tree (`taskkill /T` on Windows, a process group on POSIX), reaps the process and closes every handle. A test with a child process that outlives its parent guards this on every platform.
+  3. `ResourceWarning` (unclosed file): the stderr file leaked on the error paths. Closed in `finally`; the tests now run clean with `-W error::ResourceWarning`.

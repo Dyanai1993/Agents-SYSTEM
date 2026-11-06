@@ -81,8 +81,10 @@ class CliBackendHardeningTests(TmpHome):
             runner.run_agent("smoke", {}, task_id="t1", backend=runner.CliBackend(), env=env, settings_paths=[])
         self.assertLess(time.time() - t0, 15)               # killed at init, did not wait for the 30 s of "work"
 
-    def test_timeout_kills_the_process(self):
-        body = "import sys,time\nsys.stdin.read()\ntime.sleep(30)\n"
+    def test_timeout_kills_the_whole_process_tree(self):
+        """Windows live run: killing only the .cmd shim left the real child holding the pipe for the full 30 s."""
+        body = ("import subprocess,sys,time\nsys.stdin.read()\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\ntime.sleep(30)\n")
         env = fake_claude(self.home, body)
         t0 = time.time()
         r = runner.run_agent("smoke", {}, task_id="t1", backend=runner.CliBackend(), env=env, settings_paths=[], limits=runner.Limits(max_turns=1, timeout_s=1))

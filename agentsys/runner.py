@@ -108,6 +108,23 @@ class FakeBackend:
                            init={"apiKeySource": self.api_key_source})
 
 
+def _kill_tree(p):
+    """Kill the process AND its children. On Windows `claude` may be a .cmd shim: killing only the shim leaves the real
+    process holding our pipe open until it finishes. On POSIX the process runs in its own group."""
+    import signal
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+        else:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        p.kill()
+    except OSError:
+        pass
+
+
 class CliBackend:
     name = "cli"
 
@@ -131,12 +148,13 @@ class CliBackend:
         import tempfile
         import threading
         err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
-        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True, cwd=cwd, env=env)
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True, cwd=cwd, env=env,
+                             start_new_session=(os.name != "nt"))
         timed_out = threading.Event()
 
         def kill_on_timeout():
             timed_out.set()
-            p.kill()
+            _kill_tree(p)
         timer = threading.Timer(limits.timeout_s, kill_on_timeout)
         timer.start()
 
@@ -149,6 +167,7 @@ class CliBackend:
         threading.Thread(target=feed, daemon=True).start()
         init, result = None, None
         calls, outputs = {}, {}
+        stderr = ""
         try:
             for line in p.stdout:                       # streamed: the credential source is checked the moment init arrives
                 try:
@@ -159,7 +178,7 @@ class CliBackend:
                     init = msg
                     problems = billing_guard.check_init_message(msg)
                     if problems:
-                        p.kill()                        # stop before the agent does any work
+                        _kill_tree(p)                   # stop before the agent does any work
                         raise billing_guard.BillingGuardError(problems)
                 elif msg.get("type") == "result":
                     result = msg
@@ -179,10 +198,22 @@ class CliBackend:
         finally:
             timer.cancel()
             if p.poll() is None:
-                p.kill()
-        err_file.seek(0)
-        stderr = err_file.read()
-        err_file.close()
+                _kill_tree(p)
+            try:
+                p.wait(timeout=10)                      # reap the process: no zombies
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            for f in (p.stdout, p.stdin):               # no leaked handles, also on the error paths
+                try:
+                    f.close()
+                except (OSError, ValueError):
+                    pass
+            try:
+                err_file.seek(0)
+                stderr = err_file.read()
+            except (OSError, ValueError):
+                pass
+            err_file.close()
         if timed_out.is_set():
             return AgentResult(role=role, ok=False, backend=self.name, error=f"timeout after {limits.timeout_s}s", duration_s=time.time() - t0)
         tool_log = [dict(c, output=outputs.get(i, ("", False))[0], is_error=outputs.get(i, ("", False))[1]) for i, c in calls.items()]
