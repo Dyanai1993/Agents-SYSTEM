@@ -80,6 +80,11 @@ def submit(task_id, *, request_text=None, requirements=None, title=None, target_
     return entry
 
 
+# Build junk is never delivered, even when an older workspace committed it before the workspace .gitignore existed.
+JUNK = [":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/*.pyc", ":(exclude,glob)**/.pytest_cache/**",
+        ":(exclude,glob)**/.mypy_cache/**", ":(exclude,glob)**/.ruff_cache/**", ":(exclude,glob)**/node_modules/**",
+        ":(exclude,glob)**/.venv/**", ":(exclude,glob)**/.DS_Store"]
+
 RETRYABLE = {"needs_input", "needs_approval", "blocked", "paused", "queued"}
 
 
@@ -116,7 +121,7 @@ def retry(task_id, answer=None):
 def _merge_context(task_id, tdir):
     summary = (tdir / "summary.md").read_text(encoding="utf-8") if (tdir / "summary.md").exists() else ""
     ws = tdir / "workspace"
-    stat = loop._git(ws, "diff", "--stat", f"{_base(ws)}..HEAD").stdout.strip()
+    stat = loop._git(ws, "diff", "--stat", f"{_base(ws)}..HEAD", "--", ".", *JUNK).stdout.strip()
     return f"{summary}\nChanged files:\n{stat}\n\nApproving prepares patch files (and a branch `agentsys/{task_id}` if a target repo was given). Nothing is merged into main."
 
 
@@ -130,7 +135,7 @@ def deliver(task_id, target_repo=None):
     ws = tdir / "workspace"
     out = config.home() / "deliveries" / task_id
     out.mkdir(parents=True, exist_ok=True)
-    r = loop._git(ws, "format-patch", "-q", "-o", str(out), f"{_base(ws)}..HEAD")
+    r = loop._git(ws, "format-patch", "-q", "-o", str(out), f"{_base(ws)}..HEAD", "--", ".", *JUNK)
     patches = sorted(p.name for p in out.glob("*.patch"))
     if r.returncode or not patches:
         raise RuntimeError(f"nothing to deliver: {r.stderr.strip() or 'no commits'}")

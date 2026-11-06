@@ -73,3 +73,8 @@ in `qa_tests/` and all scratch output goes OUTSIDE the workspace; titles are cut
 Tests: `tests/test_fix_timeout_retry.py` (includes the story end to end: stop for a question, wait 10 hours, answer, resume).
 Product note from the same run (not a system bug): a CSV row with fewer or more fields than the header gives `null` values or a `null` key.
 The requirement did not say what to do, and a real intake should ask. Decide it in the next requirement.
+
+## T-0010 merge request still held build junk
+T-0010 was built before the workspace `.gitignore` existed, so its commits already contained `__pycache__/*.pyc`; the new ignore file cannot remove what is committed.
+Fix at the delivery step: the merge request's file list and the patch files exclude build junk (`__pycache__`, `*.pyc`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `node_modules`, `.venv`, `.DS_Store`) whatever the workspace history says.
+`qa_tests/` is NOT filtered by file type: a `.csv` or `.txt` there can be a real fixture of a real QA script. Scratch files are handled by the tester prompt (write them outside the workspace). Test: `test_junk_committed_by_an_old_workspace_is_filtered_at_delivery`.

@@ -227,6 +227,29 @@ class CleanDeliveryTests(TmpHome):
         patch = "".join(p.read_text() for p in (self.home / "deliveries/t1").glob("*.patch"))
         self.assertIn("app.py", patch); self.assertNotIn("pyc", patch)
 
+    def test_junk_committed_by_an_old_workspace_is_filtered_at_delivery(self):
+        """T-0010 was built before the workspace .gitignore existed: its commit already holds a .pyc and a pycache folder."""
+        from agentsys import approvals, orchestrator
+        orchestrator.submit("t1", requirements=REQ)
+        def dev(prompt):
+            ws = self.ws()
+            (ws / "app.py").write_text("print(1)")
+            (ws / "__pycache__").mkdir(exist_ok=True); (ws / "__pycache__/old.cpython-313.pyc").write_bytes(b"\x00")
+            (ws / "sub/__pycache__").mkdir(parents=True, exist_ok=True); (ws / "sub/__pycache__/x.pyc").write_bytes(b"\x00")
+            (ws / "qa_tests").mkdir(exist_ok=True); (ws / "qa_tests/real_test.py").write_text("print('qa')")
+            loop._git(ws, "add", "-f", "-A")                  # an old workspace: junk is already staged and will be committed
+            return DEV
+        f = runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass})
+        orchestrator.process("t1", backend=f, env={}, settings_paths=[])
+        self.assertIn("__pycache__", loop._git(self.ws(), "ls-files").stdout)          # the setup really did commit junk
+        ctx = approvals.pending()[0]["context"]
+        self.assertIn("app.py", ctx); self.assertNotIn("pyc", ctx); self.assertNotIn("pycache", ctx)
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        orchestrator.process("t1", backend=f, env={}, settings_paths=[])
+        patch = "".join(p.read_text() for p in (self.home / "deliveries/t1").glob("*.patch"))
+        self.assertIn("app.py", patch); self.assertIn("qa_tests/real_test.py", patch)    # real files, including real qa tests, stay
+        self.assertNotIn("pyc", patch); self.assertNotIn("pycache", patch)
+
     def test_a_seed_may_bring_its_own_gitignore(self):
         seed = self.home / "seed"; seed.mkdir(); (seed / ".gitignore").write_text("custom/\n"); (seed / "a.txt").write_text("x")
         ws = loop.ensure_workspace(self.home / "tasks/t9", seed=seed)
