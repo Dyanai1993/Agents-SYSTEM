@@ -14,6 +14,7 @@ Git policy in the task workspace:
 """
 import hashlib
 import json
+import os
 import subprocess
 
 from . import approvals, billing_guard, config, control, logger, memory, runner, schema, semantics, tasks
@@ -90,9 +91,38 @@ def protect_qa(ws, task_id):
     return bad
 
 
+def _config_leak_paths(ws):
+    """Walk the real filesystem for a top-level .claude/ or any CLAUDE.md, ignoring git status.
+
+    A user's global git ignore commonly excludes .claude/settings.local.json (the recommended
+    setup to avoid committing personal Claude Code settings), which makes `git status` blind to
+    it. Scanning the filesystem directly means the guard still catches it.
+    """
+    bad = []
+    cfg = ws / ".claude"
+    if cfg.is_dir():
+        found = False
+        for p in cfg.rglob("*"):
+            if p.is_file():
+                bad.append(p.relative_to(ws).as_posix())
+                found = True
+        if not found:
+            bad.append(".claude")               # empty .claude/ with no files inside
+    elif cfg.exists():
+        bad.append(".claude")                    # not a directory (unexpected, but still a leak)
+    for root, dirs, files in os.walk(ws):
+        dirs[:] = [d for d in dirs if d != ".git" and d != ".claude"]
+        rel_root = os.path.relpath(root, ws).replace("\\", "/")
+        prefix = "" if rel_root == "." else rel_root + "/"
+        for fn in files:
+            if fn.lower().endswith("claude.md"):
+                bad.append(prefix + fn)
+    return bad
+
+
 def protect_config(ws, task_id, who):
     """No agent may create or change .claude/ or CLAUDE.md in the workspace: Claude Code would read them as settings."""
-    bad = [f for f in _changed(ws) if f.replace("\\", "/").startswith(".claude/") or f.replace("\\", "/") == ".claude" or f.lower().endswith("claude.md")]
+    bad = _config_leak_paths(ws)
     if bad:
         for f in bad:
             path = ws / f
