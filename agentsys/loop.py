@@ -61,6 +61,9 @@ def ensure_workspace(tdir, seed=None):
         if seed:
             import shutil
             shutil.copytree(seed, ws, dirs_exist_ok=True)
+        gi = ws / ".gitignore"                      # build junk never becomes part of a delivery
+        if not gi.exists():
+            gi.write_text("__pycache__/\n*.pyc\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\nnode_modules/\n.venv/\n.DS_Store\n", encoding="utf-8")
         _git(ws, "init", "-q", check=True)
         _git(ws, "add", "-A")
         _git(ws, "commit", "-q", "--allow-empty", "-m", "workspace start", check=True)
@@ -141,7 +144,7 @@ def run_task(task_id, requirements, *, backend, title=None, env=None, settings_p
     tdir = config.home() / "tasks" / task_id
     tdir.mkdir(parents=True, exist_ok=True)
     schema.validate("requirements", requirements)   # bad input is the caller's bug: raise, do not log a task failure
-    title = title or requirements["goal"][:60]
+    title = title or tasks.short_title(requirements["goal"])
     try:
         _run(task_id, tdir, requirements, backend, title, env, settings_paths, limits, seed)
         status, state, msg = "ready_for_review", "review", "All work items and the final regression passed. Waiting for your review."

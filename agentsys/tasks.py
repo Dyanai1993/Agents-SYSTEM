@@ -19,3 +19,12 @@ def set_state(task_id, state, *, title=None, current_agent=None, waiting_approva
     logger.log_event(task_id, "orchestrator", "state_change", f"state -> {state}",
                      from_=old.get("state"), to=state, status="pending" if waiting_approval else "ok")
     return doc
+
+
+def short_title(text, n=60):
+    """First line, cut at a word boundary, never in the middle of a word."""
+    text = " ".join((text or "").split())
+    if len(text) <= n:
+        return text
+    cut = text[:n].rsplit(" ", 1)[0] or text[:n]
+    return cut.rstrip(" ,.;:-") + "\u2026"

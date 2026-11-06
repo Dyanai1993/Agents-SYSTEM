@@ -191,3 +191,56 @@ class LessonsFileTests(TmpHome):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CleanDeliveryTests(TmpHome):
+    """Found in the first real merge request (T-0020): a .pyc file and tester scratch files were part of the delivery."""
+
+    def ws(self):
+        return self.home / "tasks/t1/workspace"
+
+    def test_build_junk_is_ignored_and_never_committed(self):
+        def dev(prompt):
+            (self.ws() / "__pycache__").mkdir(exist_ok=True)
+            (self.ws() / "__pycache__/x.cpython-313.pyc").write_bytes(b"\x00\x01")
+            (self.ws() / ".pytest_cache").mkdir(exist_ok=True); (self.ws() / ".pytest_cache/v").write_text("x")
+            (self.ws() / "app.py").write_text("print(1)")
+            return DEV
+        r = go("t1", runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass}))
+        self.assertEqual(r["status"], "ready_for_review")
+        tracked = loop._git(self.ws(), "ls-files").stdout.split()
+        self.assertIn("app.py", tracked); self.assertIn(".gitignore", tracked)
+        self.assertFalse([f for f in tracked if "pycache" in f or f.endswith(".pyc") or "pytest_cache" in f])
+
+    def test_delivery_patches_contain_no_junk(self):
+        from agentsys import approvals, orchestrator
+        orchestrator.submit("t1", requirements=REQ)
+        def dev(prompt):
+            (self.ws() / "__pycache__").mkdir(exist_ok=True); (self.ws() / "__pycache__/a.pyc").write_bytes(b"x")
+            (self.ws() / "app.py").write_text("print(1)")
+            return DEV
+        f = runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass})
+        orchestrator.process("t1", backend=f, env={}, settings_paths=[])
+        self.assertNotIn("pyc", approvals.pending()[0]["context"])
+        approvals.decide(approvals.pending()[0]["id"], "approved")
+        orchestrator.process("t1", backend=f, env={}, settings_paths=[])
+        patch = "".join(p.read_text() for p in (self.home / "deliveries/t1").glob("*.patch"))
+        self.assertIn("app.py", patch); self.assertNotIn("pyc", patch)
+
+    def test_a_seed_may_bring_its_own_gitignore(self):
+        seed = self.home / "seed"; seed.mkdir(); (seed / ".gitignore").write_text("custom/\n"); (seed / "a.txt").write_text("x")
+        ws = loop.ensure_workspace(self.home / "tasks/t9", seed=seed)
+        self.assertEqual((ws / ".gitignore").read_text(), "custom/\n")
+
+    def test_the_tester_is_told_to_keep_scratch_files_out_of_the_workspace(self):
+        from agentsys import prompts
+        body = prompts.load_role("tester")[0]
+        self.assertIn("OUTSIDE the workspace", body); self.assertIn("never in `qa_tests/`", body)
+
+    def test_titles_are_cut_at_word_boundaries(self):
+        from agentsys import tasks
+        goal = "A command-line tool wc.py that counts lines, words and characters of a text file"
+        t = tasks.short_title(goal)
+        self.assertLessEqual(len(t), 61); self.assertTrue(t.endswith("…")); self.assertNotIn("chara", t.replace("characters", ""))
+        self.assertEqual(tasks.short_title("short"), "short")
+        self.assertEqual(tasks.short_title("x" * 100, 10), "x" * 10 + "…")      # one long word: hard cut

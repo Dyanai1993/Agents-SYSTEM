@@ -55,3 +55,9 @@ Still open: proposal quality from a real model, one noisy before/after run as a 
   1. Symlink tests need a privilege Windows normally does not grant: they now skip with a clear reason where symlinks cannot be created.
   2. **Real bug**: on timeout only the `.cmd` shim was killed; the real child kept the pipe open and the call returned after 30 s instead of 1 s. The CLI backend now kills the whole process tree (`taskkill /T` on Windows, a process group on POSIX), reaps the process and closes every handle. A test with a child process that outlives its parent guards this on every platform.
   3. `ResourceWarning` (unclosed file): the stderr file leaked on the error paths. Closed in `finally`; the tests now run clean with `-W error::ResourceWarning`.
+
+## First real merge request (T-0020, 2026-11-06)
+Reading the real approval request showed what no test had: the delivery contained `__pycache__/*.pyc` and tester scratch files
+(`qa_tests/err.txt`, `out.txt`, `o.txt`, ...), and the title was cut inside a word ("chara").
+Fixed: every workspace starts with a `.gitignore` for build junk (a seed may bring its own); the tester prompt says that real test scripts go
+in `qa_tests/` and all scratch output goes OUTSIDE the workspace; titles are cut at a word boundary. Tests: `CleanDeliveryTests`.

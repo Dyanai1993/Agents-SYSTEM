@@ -71,7 +71,7 @@ def submit(task_id, *, request_text=None, requirements=None, title=None, target_
         raise ValueError("give exactly one of request_text or requirements")
     if requirements is not None:
         schema.validate("requirements", requirements)
-    entry = {"task_id": task_id, "title": title or (requirements or {}).get("goal", request_text)[:60], "status": "queued",
+    entry = {"task_id": task_id, "title": title or tasks.short_title((requirements or {}).get("goal") or request_text), "status": "queued",
              "priority": priority, "created_at": logger.now(), "request_text": request_text, "requirements": requirements,
              "target_repo": str(target_repo) if target_repo else None, "resume_after": None, "note": ""}
     save_entry(entry)
