@@ -2,10 +2,10 @@
 
 ## Where the code is
 - Repository: https://github.com/Dyanai1993/Agents-SYSTEM
-- Branch to review: https://github.com/Dyanai1993/Agents-SYSTEM/tree/claude/phase4-memory-evals
+- Branch to review: https://github.com/Dyanai1993/Agents-SYSTEM/tree/claude/fix-timeout-and-retry
 - Pull request (diff and discussion): https://github.com/Dyanai1993/Agents-SYSTEM/pull/7
-- Compare with main: https://github.com/Dyanai1993/Agents-SYSTEM/compare/main...claude/phase4-memory-evals
-Review the branch above, not main. Files are listed relative to the repository root; each one opens at `https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/<path>`.
+- Compare with main: https://github.com/Dyanai1993/Agents-SYSTEM/compare/main...claude/fix-timeout-and-retry
+Review the branch above, not main. Files are listed relative to the repository root; each one opens at `https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/<path>`.
 
 ## Your role
 You are an independent REVIEWER. Review only. Do NOT edit, create, delete or commit any file. Do NOT run anything that spends
@@ -33,38 +33,46 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 - lessons.md has at most 60 lines in total (header included); at most 5 lessons are injected per agent call, only for the matching role or 'all'
 - Every review finding of the first external review was fixed or explicitly marked partly fixed in docs/review-response.md, each with a test
 - The gate refuses invalid, partial, unpaired or unfinished eval runs and gives no verdict for them
+- Since the first review: the task timeout clock restarts per run instead of counting paused/waiting time (Ledger.begin_run), orch.py retry [--answer] resumes a blocked/needs_input/needs_approval/paused task, and delivery (patches + target-repo branch) filters build junk even from workspaces committed before the ignore file existed
+- protect_config (the .claude/CLAUDE.md injection guard) now finds leaked config files by walking the workspace filesystem directly, not by trusting `git status` - a global gitignore that excludes .claude/settings.local.json (a commonly recommended personal setup) used to make the guard blind to exactly that file
+- deliver() validates the target repo exists and is a git repository before touching it, and fails into a clean `blocked` state with a readable note instead of crashing on every retry
+- Live-verified this round, not just unit-tested: a full submit -> intake -> plan -> build/test -> final regression -> merge gate -> approve -> deliver cycle with a real --target-repo (T-0022), and a real `evals/run_evals.py real` baseline run (6/8 tasks, 148,400 tokens actual)
 
 ## Files to read (start here)
-- [agentsys/memory.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/memory.py)  (144 lines)
-- [agentsys/learning.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/learning.py)  (331 lines)
-- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/loop.py)  (354 lines)
-- [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/orchestrator.py)  (188 lines)
-- [agentsys/dashboard_data.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/agentsys/dashboard_data.py)  (222 lines)
-- [evals/run_evals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/evals/run_evals.py)  (174 lines)
-- [.claude/agents/reviewer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/.claude/agents/reviewer.md)  (38 lines)
-- [.claude/agents/tester.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/.claude/agents/tester.md)  (43 lines)
-- [.claude/agents/developer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/.claude/agents/developer.md)  (45 lines)
-- [.claude/agents/architect.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/.claude/agents/architect.md)  (51 lines)
-- [schemas/lesson.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/schemas/lesson.schema.json)  (70 lines)
-- [schemas/proposals.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/schemas/proposals.schema.json)  (66 lines)
-- [dashboard/index.html](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/dashboard/index.html)  (175 lines)
-- [scripts/orch.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/scripts/orch.py)  (75 lines)
-- [scripts/gen_review_prompt.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/scripts/gen_review_prompt.py)  (90 lines)
-- [tests/test_phase4.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/phase4-memory-evals/tests/test_phase4.py)  (506 lines)
+- [agentsys/memory.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/memory.py)  (144 lines)
+- [agentsys/learning.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/learning.py)  (331 lines)
+- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/loop.py)  (388 lines)
+- [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/orchestrator.py)  (230 lines)
+- [agentsys/dashboard_data.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/dashboard_data.py)  (222 lines)
+- [evals/run_evals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/evals/run_evals.py)  (174 lines)
+- [.claude/agents/reviewer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/reviewer.md)  (38 lines)
+- [.claude/agents/tester.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/tester.md)  (43 lines)
+- [.claude/agents/developer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/developer.md)  (45 lines)
+- [.claude/agents/architect.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/architect.md)  (51 lines)
+- [schemas/lesson.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/schemas/lesson.schema.json)  (70 lines)
+- [schemas/proposals.schema.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/schemas/proposals.schema.json)  (66 lines)
+- [dashboard/index.html](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/dashboard/index.html)  (175 lines)
+- [scripts/orch.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/orch.py)  (80 lines)
+- [scripts/gen_review_prompt.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/gen_review_prompt.py)  (90 lines)
+- [tests/test_phase4.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase4.py)  (511 lines)
+- [tests/test_review_fixes.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_review_fixes.py)  (269 lines)
+- [tests/test_phase3.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase3.py)  (310 lines)
+- [tests/test_fix_timeout_retry.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_fix_timeout_retry.py)  (125 lines)
+- [.gitattributes](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.gitattributes)  (1 lines)
 
 ## Weak points the builder already suspects (confirm, refute, or rank them)
-- NEW since the first review and NOT run against a real model: the CLI backend now streams and kills the process at init, and passes --tools and --strict-mcp-config. Verify with scripts/live_smoke.py
-- The reviewer prompt, lesson injection and the real eval runner were never run against a real model. Proposal quality from Haiku is unknown
-- LLM runs are noisy. The gate compares ONE before run with ONE after run (now validated and paired, but still single runs). A repeat-run or paired-statistic design is not built
+- The reviewer prompt, lesson injection, the lesson-proposal apply/eval-gate path, a fix loop and a re-plan were STILL never run against a real model - this round's live runs (T-0022, the eval baseline) exercised intake/plan/build/test/deliver and the real eval runner itself, not memory/learning
+- LLM runs are noisy. The gate compares ONE before run with ONE after run (validated and paired, but still single runs). A repeat-run or paired-statistic design is not built
 - apply() runs only free checks (unit tests, selfcheck). They prove nothing broke; they do not measure whether the new rule helps
 - Proposals are filtered by code (targets, Rules section only, no weakening words, no removed never/only rules) and bound to a content hash, but no filter judges meaning: the human approval of the exact diff is the real control
 - Lessons are fixed templates; model text is hashed only. The injected lesson text is therefore generic: check that this is still useful
 - Eval runs use an isolated home, so they measure prompt changes but never lesson injection
-- A real eval run costs about 8 x 90k tokens (estimate from 3 live tasks). Its share of a Max 5x window is unknown
+- A real eval run now has a live measurement (148,400 tokens for 8 tasks, ~18.5k/task), far below the earlier 8x90k estimate - but it's a single run; 02-api-endpoint failed on the evidence-matching rule being strict about an honestly-batched one-liner (same class of issue as T-0001), and 06-cli-tool's golden value was wrong on Windows until this round's .gitattributes fix, so the 6/8 result is not a clean signal of the gate's real false-positive rate
 - Lessons are extracted only by orchestrator.process(); tasks run with scripts/run_task.py record nothing
 - Proposal approvals use pseudo task ids ('lesson-P-1'); the Approvals tab shows them without a task title
-- The Windows suite was not run on the review-fix commits (new tests start subprocesses and kill them)
 - This branch is stacked on the open PR #6
+- protect_config's new filesystem-walk fix only covers a top-level .claude/ and any CLAUDE.md anywhere; it does not re-check whether other injection surfaces (env files, other dotfiles) have the same git-status blind spot
+- deliver()'s new target-repo validation checks existence and `git rev-parse --is-inside-work-tree`, but does not check the target repo is on the branch/commit the task's base assumes, or that `git am` will apply cleanly before creating the branch
 
 ## How to verify without spending quota
 - `python -m unittest discover -s tests -t . -v`
@@ -86,6 +94,8 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 - Are the new proposal restrictions (Rules section only, marker counts, forbidden words) bypassable with realistic text, and are they too strict to be useful?
 - Is the gate now sound enough for ONE decision, or must it be repeated? Propose the cheapest change.
 - What else would you test that the new tests miss?
+- Is protect_config's filesystem walk (agentsys/loop.py _config_leak_paths) actually immune to git-ignore/hidden-file tricks, or just to the one case that was found (global gitignore on .claude/settings.local.json)?
+- Is the evidence-matching rule in semantics.py too strict for an honest tester that batches several one-liners in one Bash call (seen live twice now: T-0001 and this round's 02-api-endpoint)? Propose a concrete relaxation if so, without reopening the original hole it was built to close.
 
 ## Output format (use exactly this)
 1. **Verdict**: one of `ship`, `ship after fixes`, `do not ship`, with one sentence.
