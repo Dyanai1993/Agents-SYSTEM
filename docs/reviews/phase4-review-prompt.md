@@ -36,15 +36,21 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 - Since the first review: the task timeout clock restarts per run instead of counting paused/waiting time (Ledger.begin_run), orch.py retry [--answer] resumes a blocked/needs_input/needs_approval/paused task, and delivery (patches + target-repo branch) filters build junk even from workspaces committed before the ignore file existed
 - protect_config (the .claude/CLAUDE.md injection guard) now finds leaked config files by walking the workspace filesystem directly, not by trusting `git status` - a global gitignore that excludes .claude/settings.local.json (a commonly recommended personal setup) used to make the guard blind to exactly that file
 - deliver() validates the target repo exists and is a git repository before touching it, and fails into a clean `blocked` state with a readable note instead of crashing on every retry
-- Live-verified this round, not just unit-tested: a full submit -> intake -> plan -> build/test -> final regression -> merge gate -> approve -> deliver cycle with a real --target-repo (T-0022), and a real `evals/run_evals.py real` baseline run (6/8 tasks, 148,400 tokens actual)
+- Live-verified this round, not just unit-tested: a full submit -> intake -> plan -> build/test -> final regression -> merge gate -> approve -> deliver cycle with a real --target-repo (T-0022), and three real `evals/run_evals.py real` baseline runs
+- A SECOND external review (commit 3a1c2ff) found 12 more real bugs, all fixed with a test each (commit c9e9aef), none refused: a Ledger held across the work-item loop that overwrote real call/token counts on every fix loop or replan; a requirement change via `retry --answer` that never invalidated final_done or the merge approval, so a stale approval could be reused for different content; two _cleanup() bugs in the lesson path (discarding unrelated uncommitted work on main, deleting a same-named branch it did not create); protect_config leaving a leak staged (git add'ed) instead of removed; both backends now failing closed on a MISSING init message, not only a bad one; an unsound reverse substring match in evidence_errors that let a trivial real command back an arbitrarily longer fabricated claim; a 'Rules section only' check that only looked at where an edit started, not where it ended; intake with no BudgetExceeded handling that could crash into a permanently stuck queued task; deliver() made idempotent after a crash and self-cleaning after a failed `git am`; _kill_tree's os.getpgid(p.pid) replaced with killpg(p.pid, ...) directly, since the lookup needs the (possibly already-gone) direct child to still resolve. Full table: docs/review-response.md, 'Second external review of phase 4'
+- Two more real eval re-runs after the second review's fixes confirmed 06-cli-tool now passes (the CRLF fix) and surfaced two more issues, both investigated and recorded: 02-api-endpoint's prompt under-specified what its own hidden check.py expects (fixed twice: whitespace-only name, and body's default value) - not an agentsys bug, an eval-task wording gap; 04-data-analysis's architect miscalculated a numeric acceptance criterion from the real CSV (said total_revenue=45.0, the correct value is 57.5) and the developer correctly asked for clarification instead of forcing a wrong answer - LLM arithmetic variance, not a code bug, but the system's 'ask rather than guess' design handled it as intended
 
 ## Files to read (start here)
 - [agentsys/memory.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/memory.py)  (144 lines)
-- [agentsys/learning.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/learning.py)  (331 lines)
-- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/loop.py)  (388 lines)
-- [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/orchestrator.py)  (230 lines)
+- [agentsys/learning.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/learning.py)  (366 lines)
+- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/loop.py)  (402 lines)
+- [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/orchestrator.py)  (276 lines)
+- [agentsys/runner.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/runner.py)  (390 lines)
+- [agentsys/semantics.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/semantics.py)  (150 lines)
+- [agentsys/approvals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/approvals.py)  (124 lines)
 - [agentsys/dashboard_data.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/dashboard_data.py)  (222 lines)
-- [evals/run_evals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/evals/run_evals.py)  (174 lines)
+- [evals/run_evals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/evals/run_evals.py)  (185 lines)
+- [evals/tasks/02-api-endpoint/task.json](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/evals/tasks/02-api-endpoint/task.json)  (7 lines)
 - [.claude/agents/reviewer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/reviewer.md)  (38 lines)
 - [.claude/agents/tester.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/tester.md)  (43 lines)
 - [.claude/agents/developer.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/developer.md)  (45 lines)
@@ -54,25 +60,29 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 - [dashboard/index.html](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/dashboard/index.html)  (175 lines)
 - [scripts/orch.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/orch.py)  (80 lines)
 - [scripts/gen_review_prompt.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/gen_review_prompt.py)  (90 lines)
-- [tests/test_phase4.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase4.py)  (511 lines)
-- [tests/test_review_fixes.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_review_fixes.py)  (269 lines)
-- [tests/test_phase3.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase3.py)  (310 lines)
-- [tests/test_fix_timeout_retry.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_fix_timeout_retry.py)  (125 lines)
+- [tests/test_phase4.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase4.py)  (551 lines)
+- [tests/test_review_fixes.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_review_fixes.py)  (319 lines)
+- [tests/test_phase3.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase3.py)  (342 lines)
+- [tests/test_fix_timeout_retry.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_fix_timeout_retry.py)  (147 lines)
+- [tests/test_loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_loop.py)  (465 lines)
 - [.gitattributes](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.gitattributes)  (1 lines)
 
 ## Weak points the builder already suspects (confirm, refute, or rank them)
-- The reviewer prompt, lesson injection, the lesson-proposal apply/eval-gate path, a fix loop and a re-plan were STILL never run against a real model - this round's live runs (T-0022, the eval baseline) exercised intake/plan/build/test/deliver and the real eval runner itself, not memory/learning
-- LLM runs are noisy. The gate compares ONE before run with ONE after run (validated and paired, but still single runs). A repeat-run or paired-statistic design is not built
+- The reviewer prompt, lesson injection, and the lesson-proposal apply/eval-gate path were STILL never run against a real model - all live evidence so far (T-0022, three eval baselines) exercises intake/plan/build/test/deliver and the real eval runner itself, not memory/learning. A fix loop and a re-plan also still have no live run
+- LLM runs are noisy, and this round's three baseline runs prove it concretely: pass counts were 6/8, 7/8, 6/8 across runs on the SAME code, with the specific failing task and reason changing each time (evidence-matching strictness, then a wrong golden value, then an under-specified prompt, then an architect arithmetic error on a 4th task). The eval gate still compares only ONE before run with ONE after run; a repeat-run or paired-statistic design is not built, and these three runs are a live demonstration of why that single-run design is risky
+- A SECOND review's 12 fixes (commit c9e9aef) are code-reviewed and unit-tested by the same session that wrote them, but NOT yet independently re-reviewed - this is exactly that re-review
+- SdkBackend's new fail-closed-on-missing-init fix is code-level only: `claude-agent-sdk` is not installed in this environment, so the exact message-type names it checks (AssistantMessage/UserMessage/ResultMessage) were read from the SDK's public API, never run against it. The `--tools`-equivalent availability gap (vs CLI's --tools) is also still open for SdkBackend
+- The evidence-matching rule's false-rejection risk (an honest tester batching several real one-liners with different quoting/escaping than the logged command) is unresolved - finding 8's fix made the rule strictly safer against fabrication, but did not address false rejections, and this exact failure mode reproduced live again this round
+- The architect can make outright arithmetic errors deriving a specific numeric acceptance criterion from real data when the task's own expected answer is deliberately vague (04-data-analysis, this round: claimed total_revenue=45.0, the correct sum from the fixture is 57.5). The developer caught the inconsistency and asked rather than forcing a wrong answer, so the SYSTEM behaved correctly - but there is no code-level safeguard against the architect's own math being wrong in a case where the developer does NOT independently re-derive and check it
 - apply() runs only free checks (unit tests, selfcheck). They prove nothing broke; they do not measure whether the new rule helps
 - Proposals are filtered by code (targets, Rules section only, no weakening words, no removed never/only rules) and bound to a content hash, but no filter judges meaning: the human approval of the exact diff is the real control
 - Lessons are fixed templates; model text is hashed only. The injected lesson text is therefore generic: check that this is still useful
 - Eval runs use an isolated home, so they measure prompt changes but never lesson injection
-- A real eval run now has a live measurement (148,400 tokens for 8 tasks, ~18.5k/task), far below the earlier 8x90k estimate - but it's a single run; 02-api-endpoint failed on the evidence-matching rule being strict about an honestly-batched one-liner (same class of issue as T-0001), and 06-cli-tool's golden value was wrong on Windows until this round's .gitattributes fix, so the 6/8 result is not a clean signal of the gate's real false-positive rate
 - Lessons are extracted only by orchestrator.process(); tasks run with scripts/run_task.py record nothing
 - Proposal approvals use pseudo task ids ('lesson-P-1'); the Approvals tab shows them without a task title
 - This branch is stacked on the open PR #6
-- protect_config's new filesystem-walk fix only covers a top-level .claude/ and any CLAUDE.md anywhere; it does not re-check whether other injection surfaces (env files, other dotfiles) have the same git-status blind spot
-- deliver()'s new target-repo validation checks existence and `git rev-parse --is-inside-work-tree`, but does not check the target repo is on the branch/commit the task's base assumes, or that `git am` will apply cleanly before creating the branch
+- protect_config's filesystem-walk fix only covers a top-level .claude/ and any CLAUDE.md anywhere; it does not re-check whether other injection surfaces (env files, other dotfiles) have the same git-status blind spot
+- deliver()'s target-repo validation (existence, is-a-git-repo, the new delivery.json idempotency journal) does not check the target repo is on the branch/commit the task's base assumes before attempting `git am`
 
 ## How to verify without spending quota
 - `python -m unittest discover -s tests -t . -v`
@@ -88,14 +98,14 @@ A personal multi-agent engineering system on Claude Code with a Max subscription
 5. Test quality: tests that pass for the wrong reason, missing failure cases, tests that mirror the implementation.
 6. Maintainability and honesty of docs: do README and docs say what the code does? Anything claimed but not built?
 7. Specific questions for this phase:
-- Re-check each fix in docs/review-response.md against the code: is it really closed, or only moved?
-- Can anything still reach a billing path or a wrong credential source: workspace settings, env in settings files, other config directories, the streamed init check (what if init never arrives)?
-- Is the streaming CliBackend safe: deadlocks, zombie processes, partial JSON lines, the timeout timer, stderr handling, Windows .cmd wrappers?
-- Are the new proposal restrictions (Rules section only, marker counts, forbidden words) bypassable with realistic text, and are they too strict to be useful?
-- Is the gate now sound enough for ONE decision, or must it be repeated? Propose the cheapest change.
+- Re-check each of the SECOND review's 12 fixes (docs/review-response.md, 'Second external review of phase 4') against the code: is each one really closed, or only moved? In particular: does the new Ledger(task_id).record_fix_loop()/record_replan() pattern (a fresh instance per call, no long-lived one) actually close the stale-snapshot hole everywhere it could occur, or only in the one path that was fixed?
+- The merge approval is now bound to a diff_ref of (workspace HEAD sha, requirement hash) via approvals.request()'s new 'stale if diff_ref differs' rule. Does this rule have any gap - e.g. a path that reaches the merge gate with the SAME workspace sha and requirement hash but genuinely different content, or a case where approvals.request() is called for a different gate and the new staleness check interferes with it?
+- learning._cleanup()'s new 'only touch the working tree if still on `branch`' logic: is there a path where apply() or gate() calls it from somewhere else entirely (not the branch, not already back on start_ref) where this leaves something unhandled?
+- Is the gate now sound enough for ONE decision, or must it be repeated? This round's three live baseline runs (6/8, 7/8, 6/8, three DIFFERENT failing reasons) are concrete evidence of single-run noise - propose the cheapest change that would actually help.
+- Is the evidence-matching rule in semantics.py (now `cmd in r` only, the reverse dropped) still too strict for an honest tester that batches several one-liners with different quoting/escaping than what gets logged? This reproduced live again this round on 02-api-endpoint. Propose a concrete relaxation if one exists that does not reopen finding 8's fabrication hole.
+- Should an eval task's 'expected' field ever be shown to the architect for planning, or only used by the hidden check.py? This round the architect invented a wrong specific number (45.0 vs the correct 57.5) when deriving an acceptance criterion from real data with no 'known answer' to check itself against - is there a cheap mitigation (e.g. the architect's own plan running a sanity computation) worth building, or is 'the developer catches it and asks' (which is what happened) the right design already?
 - What else would you test that the new tests miss?
-- Is protect_config's filesystem walk (agentsys/loop.py _config_leak_paths) actually immune to git-ignore/hidden-file tricks, or just to the one case that was found (global gitignore on .claude/settings.local.json)?
-- Is the evidence-matching rule in semantics.py too strict for an honest tester that batches several one-liners in one Bash call (seen live twice now: T-0001 and this round's 02-api-endpoint)? Propose a concrete relaxation if so, without reopening the original hole it was built to close.
+- Things you did NOT review from the first round that still apply: anything still reaching a billing path or wrong credential source via workspace settings, env in settings files, or other config directories; whether the streaming CliBackend is safe from deadlocks, zombie processes, partial JSON lines, stderr handling, Windows .cmd wrappers.
 
 ## Output format (use exactly this)
 1. **Verdict**: one of `ship`, `ship after fixes`, `do not ship`, with one sentence.

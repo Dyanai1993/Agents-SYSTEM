@@ -2,6 +2,6 @@
   "id": "02-api-endpoint",
   "title": "API endpoint with tests",
   "domain": "backend",
-  "prompt": "In app.py write handle(method, path, body) -> (status, dict). POST /items with {'name': str} returns 201 and {'id': int, 'name': str}. GET /items returns 200 and {'items': [...]}. A name that is missing, not a string, empty, or all whitespace (e.g. '   ') all return 400. Unknown path returns 404. Add tests in test_app.py.",
+  "prompt": "In app.py write handle(method, path, body=None) -> (status, dict). `body` defaults to None and must be optional, since GET calls pass only method and path. POST /items with {'name': str} returns 201 and {'id': int, 'name': str}. GET /items returns 200 and {'items': [...]}. A name that is missing, not a string, empty, or all whitespace (e.g. '   ') all return 400. Unknown path returns 404. Add tests in test_app.py.",
   "expected": "hidden tests pass; test_app.py exists"
 }
