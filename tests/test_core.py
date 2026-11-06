@@ -81,6 +81,12 @@ class SchemaTests(TmpHome):
         self.assertTrue(schema.errors_for("security_report", self._sec("fail", [low])))
         self.assertTrue(schema.errors_for("security_report", self._sec("fail", [])))
 
+    def test_security_findings_are_bounded(self):
+        """Phase 5 review: the prompt's 'zero to ten findings' was not enforced, and descriptions had no limit."""
+        f = {"severity": "low", "category": "c", "file": "a.py", "description": "d", "evidence": "e"}
+        self.assertTrue(schema.errors_for("security_report", self._sec("pass", [f] * 11)))
+        self.assertTrue(schema.errors_for("security_report", self._sec("pass", [dict(f, description="x" * 501)])))
+
 
 class LoggerTests(TmpHome):
     def test_event_with_payload_ref(self):

@@ -1,6 +1,6 @@
 """Run or resume a task.
 
-  python scripts/run_task.py T-0001 --goal "Build a CLI that counts words" --criteria "prints counts" [--backend sdk|cli|fake]
+  python scripts/run_task.py T-0001 --goal "Build a CLI that counts words" --criteria "prints counts" [--backend cli]
 
 Real backends use your Claude login. The billing guard runs before every call.
 """
@@ -14,7 +14,7 @@ ap.add_argument("task_id")
 ap.add_argument("--goal", required=True)
 ap.add_argument("--criteria", action="append", required=True, help="acceptance criterion (repeatable)")
 ap.add_argument("--constraint", action="append", default=[])
-ap.add_argument("--backend", default="cli", choices=["sdk", "cli"])
+ap.add_argument("--backend", default="cli", choices=["cli"])   # sdk builds no tool log: see loop.refuse_unverifiable_backend
 a = ap.parse_args()
 try:
     billing_guard.run_guard()

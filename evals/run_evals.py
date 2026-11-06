@@ -166,7 +166,7 @@ def main():
         import argparse
         ap = argparse.ArgumentParser()
         ap.add_argument("mode"); ap.add_argument("--label", required=True)
-        ap.add_argument("--backend", default="cli", choices=["cli", "sdk"]); ap.add_argument("--only", action="append")
+        ap.add_argument("--backend", default="cli", choices=["cli"]); ap.add_argument("--only", action="append")
         ap.add_argument("--token-budget", type=int, default=900_000)
         ap.add_argument("--resume", help="continue THIS run folder (evals/runs/<run>); without it every run is new")
         ap.add_argument("--yes", action="store_true", help="confirm that this spends subscription usage")

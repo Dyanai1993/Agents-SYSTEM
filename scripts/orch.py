@@ -2,7 +2,7 @@
 
   python scripts/orch.py submit T-0010 --request "Make a CLI that ..." [--target-repo PATH]
   python scripts/orch.py submit T-0010 --goal G --criteria C [--criteria C2] [--constraint X]
-  python scripts/orch.py run-next [--backend cli|sdk]     advances ONE task (sequential)
+  python scripts/orch.py run-next [--backend cli]     advances ONE task (sequential)
   python scripts/orch.py status
   python scripts/orch.py pending | approve ID [--note N] | reject ID [--note N]
   python scripts/orch.py pause|stop|resume TASK_ID
@@ -20,7 +20,7 @@ sub = ap.add_subparsers(dest="cmd", required=True)
 s = sub.add_parser("submit"); s.add_argument("task_id"); s.add_argument("--request"); s.add_argument("--goal")
 s.add_argument("--criteria", action="append", default=[]); s.add_argument("--constraint", action="append", default=[])
 s.add_argument("--target-repo"); s.add_argument("--priority", type=int, default=5)
-r = sub.add_parser("run-next"); r.add_argument("--backend", default="cli", choices=["cli", "sdk"])
+r = sub.add_parser("run-next"); r.add_argument("--backend", default="cli", choices=["cli"])   # sdk builds no tool log
 sub.add_parser("status"); sub.add_parser("pending")
 for n in ("approve", "reject"):
     x = sub.add_parser(n); x.add_argument("id"); x.add_argument("--note", default="")

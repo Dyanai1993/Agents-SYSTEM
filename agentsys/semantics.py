@@ -8,18 +8,16 @@ import re
 from pathlib import Path
 
 
-# Still open (noted since the second review): an honestly-run command or its real output can be quoted
-# with different characters than what a model writes when paraphrasing it back in a report (single vs
-# double vs backtick, e.g. `python -c 'print(1)'` vs `python -c "print(1)"`), which used to break both the
-# command-match and the evidence-in-output match outright. Quote characters carry no command/output
-# semantics of their own here (unlike whitespace or path separators, which can also legitimately differ -
-# see _squash below), so dropping all of them before comparing closes this without weakening what the
-# checks actually verify: a fabricated claim still has to match everything else in the real text.
-_QUOTE_CHARS = str.maketrans("", "", "'\"`")
+# A model paraphrasing a real command or output may swap one quote STYLE for another
+# (`python -c 'print(1)'` vs `python -c "print(1)"`). All three quote characters are mapped to one, never
+# deleted: whether a quote is THERE carries meaning ({"enabled": "false"} is a string, {"enabled": false} a
+# boolean; os.system("user_input") is a literal, os.system(user_input) a variable). Phase 5 review: deleting
+# them let evidence with a different meaning match.
+_QUOTE_STYLE = str.maketrans("'`", '""')
 
 
 def norm(cmd: str) -> str:
-    return re.sub(r"\s+", " ", (cmd or "").strip()).translate(_QUOTE_CHARS)
+    return re.sub(r"\s+", " ", (cmd or "").strip()).translate(_QUOTE_STYLE)
 
 
 # ------------------------------------------------------------------ plan
@@ -81,15 +79,13 @@ _PATH_TOKEN = re.compile(r"\S*[/\\]\S*|\b[A-Za-z]:\S*")
 
 
 def _squash(text: str) -> str:
-    """Drop whitespace, mask path-like tokens, and drop quote characters.
+    """Drop whitespace, mask path-like tokens, and unify quote style (see _QUOTE_STYLE).
 
     Git Bash on Windows rewrites /tmp/f.txt to C:/Users/.../f.txt in the output, so a quoted
     path never equals the real one. Both sides are masked the same way: the numbers and words
-    around the path must still match, the path itself does not. Quote characters ('/"/`) are
-    dropped too: a model paraphrasing a real command or output can freely swap one quote style
-    for another with no change in meaning, which used to break an exact-match comparison.
+    around the path must still match, the path itself does not.
     """
-    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or "")).translate(_QUOTE_CHARS)
+    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or "")).translate(_QUOTE_STYLE)
 
 
 MIN_SHARE = 0.75
@@ -111,32 +107,18 @@ def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
     reach the evidence's own end means whatever is claimed LAST - the part doing the actual claiming - must
     be an exact, unbroken match; only text BEFORE it may be fuzzy/absent from the real output.
 
-    Found live (first real Phase 5 task, T-0023): a check covering TWO scenarios ("no argument and
-    nonexistent file...") legitimately quoted two non-adjacent real excerpts from two different labelled
-    sections of one batched script, joined by a single "...". Both excerpts were real and accurate, but
-    stripping "..." without keeping the gap it marks forced the whole thing to be ONE contiguous run -
-    which it genuinely is not, since real, unrelated output sits between the two kept pieces. Rejecting
-    this punished an honest, accurate report. Fixed below: if the single-run match fails, fall back to
-    treating each "..."-delimited piece as its own exact, in-order excerpt - not a fuzzy ratio match (a
-    kept piece is a direct quote, not a paraphrase), so a genuinely wrong value in ANY piece - including
-    the last one - is still caught exactly as before.
+    The evidence of one check is ONE excerpt. Phase 5 review: matching "..."-separated pieces independently
+    (tried after live run T-0023, where one check quoted two scenarios) let a label from one line be joined
+    to a value from another ("test_result: ... PASS" against "test_result: FAIL ... expected result: PASS").
+    Two scenarios are two checks; the tester prompt says so.
     """
     ev = _squash(re.sub(r"\.\.\.|\u2026", "", evidence or ""))      # '...' marks a cut, not content
     if len(ev) < MIN_EVIDENCE_CHARS or not outputs_squashed:
         return False
     m = difflib.SequenceMatcher(None, ev, outputs_squashed, autojunk=False).find_longest_match(0, len(ev), 0, len(outputs_squashed))
-    if m.a + m.size == len(ev) and m.size >= max(MIN_EVIDENCE_CHARS, MIN_SHARE * len(ev)):
-        return True
-    segments = [s for s in (_squash(p) for p in re.split(r"\.\.\.|\u2026", evidence or "")) if s]
-    if len(segments) < 2:
+    if m.a + m.size != len(ev):      # evidence has its own unmatched tail: the claimed payload itself differs
         return False
-    pos = 0
-    for seg in segments:
-        idx = outputs_squashed.find(seg, pos)
-        if idx == -1:
-            return False
-        pos = idx + len(seg)
-    return True
+    return m.size >= max(MIN_EVIDENCE_CHARS, MIN_SHARE * len(ev))
 
 
 def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
@@ -238,14 +220,32 @@ def security_evidence_errors(report: dict, ws: Path) -> list:
             errs.append(f"finding in {rel!r}: no such file in the workspace")
             continue
         try:
-            content = norm(resolved.read_text(encoding="utf-8", errors="replace"))
+            raw = resolved.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
             errs.append(f"finding in {rel!r}: cannot read the file ({e})")
             continue
-        ev = norm(f["evidence"])
-        if len(ev) < MIN_EVIDENCE_CHARS or ev not in content:
+        if not _quote_in_file(f["evidence"], raw):
             errs.append(f"finding in {rel!r}: evidence does not appear in the file. Claimed: {f['evidence'][:160]!r}")
     return errs
+
+
+REDACTED = "[REDACTED]"
+
+
+def _quote_in_file(evidence: str, raw: str) -> bool:
+    """The security prompt asks for secrets to be masked as [REDACTED], so the report never stores one.
+    A masked quote must still be real: the kept text around each mask must sit on ONE line of the file, in
+    order, with a non-empty value where each mask is - never glued together from different lines."""
+    if REDACTED not in evidence:
+        ev = norm(evidence)
+        return len(ev) >= MIN_EVIDENCE_CHARS and ev in norm(raw)
+    def keep_edges(s):                       # like norm(), but the spaces next to a mask are real text
+        return re.sub(r"\s+", " ", s).translate(_QUOTE_STYLE)
+    pieces = [keep_edges(p) for p in evidence.split(REDACTED)]
+    if len("".join(pieces).strip()) < MIN_EVIDENCE_CHARS:
+        return False
+    pattern = re.compile(".+?".join(re.escape(p) for p in pieces))
+    return any(pattern.search(keep_edges(line)) for line in raw.splitlines())
 
 
 def derive_security_verdict(findings) -> str:

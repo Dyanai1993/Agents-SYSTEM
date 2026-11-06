@@ -98,6 +98,42 @@ class OrchestratorTests(TmpHome):
             (self.ws(tid) / "app.py").write_text("print('hi')\n"); return DEV
         return dev
 
+    def test_a_different_security_report_needs_a_new_merge_approval(self):
+        """Phase 5 review: the approval identity covered the commit and the requirement, not the security
+        report. An approval made before the report existed (or for another one) stayed valid for delivery."""
+        orchestrator.submit("t1", requirements=REQ)
+        f = fb(developer=self.dev_writes("t1"))
+        self.assertEqual(proc("t1", f)["status"], "waiting_approval")
+        first = approvals.latest("t1", "merge")[0]
+        approvals.decide(first["id"], "approved")
+        p = self.home / "tasks/t1/security_report.json"
+        rep = json.loads(p.read_text())
+        rep["findings"] = [{"severity": "medium", "category": "permission leak", "file": "app.py",
+                            "description": "binds to 0.0.0.0", "evidence": "x"}]
+        p.write_text(json.dumps(rep))
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "waiting_approval")
+        new = approvals.latest("t1", "merge")[0]
+        self.assertNotEqual(new["id"], first["id"]); self.assertIn("binds to 0.0.0.0", new["context"])
+
+    def test_many_long_findings_are_never_cut_off_silently(self):
+        """Phase 5 review: the approval context is cut at 4000 characters, silently, and findings had no
+        length bound - a second finding vanished from a 4782-character context."""
+        tdir = self.home / "tasks/t1"; tdir.mkdir(parents=True)
+        findings = [{"severity": "low", "category": "c", "file": "a.py", "description": "x" * 500, "evidence": "e"} for _ in range(12)]
+        (tdir / "security_report.json").write_text(json.dumps({"verdict": "pass", "summary": "s", "findings": findings}))
+        s = orchestrator._security_summary("t1", tdir)
+        self.assertIn("12 finding(s)", s); self.assertIn("and 2 more", s); self.assertIn("tasks/t1/security_report.json", s)
+        self.assertLess(len(s), 3000)
+        a = approvals.request("t2", "merge", "y" * 5000)
+        self.assertLessEqual(len(a["context"]), approvals.CONTEXT_MAX); self.assertIn("[cut:", a["context"])
+
+    def test_the_sdk_backend_is_refused_before_intake(self):
+        orchestrator.submit("t1", request_text="build something")
+        with self.assertRaises(ValueError):
+            proc("t1", runner.SdkBackend())
+        self.assertEqual(orchestrator.load_entry("t1")["status"], "queued")      # nothing ran, nothing changed
+
     def test_full_flow_with_merge_gate_and_patches(self):
         orchestrator.submit("t1", requirements=REQ)
         f = fb(developer=self.dev_writes("t1"))

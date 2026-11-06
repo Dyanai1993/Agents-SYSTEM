@@ -81,6 +81,43 @@ def _is_qa(path):
     return path.replace("\\", "/").startswith(QA_DIR + "/")
 
 
+def _head(ws):
+    return _git(ws, "rev-parse", "HEAD").stdout.strip()
+
+
+def _agent_mutations(ws, before_head, keep_qa):
+    """What a role that must not change the workspace changed anyway: working-tree and STAGED changes, and
+    any commit it made itself (a self-made commit leaves a clean `git status`). keep_qa: the tester may
+    write qa_tests/; the security reviewer may write nothing."""
+    changed = [f for f in _changed(ws) if not (keep_qa and _is_qa(f))]
+    if _head(ws) != before_head:
+        changed.append(f"(new commit on top of {before_head[:8]})")
+    return changed
+
+
+def _revert_agent_changes(ws, before_head, keep_qa):
+    """Back to before_head. `checkout -- .` alone restores from the INDEX, so a change the role had already
+    staged would survive it (the same staging gap protect_config and protect_qa had)."""
+    if keep_qa:
+        _git(ws, "reset", "-q", "--mixed", before_head)      # undoes its commits AND unstages; files stay
+        _git(ws, "checkout", "--", ".", f":(exclude){QA_DIR}")
+        _git(ws, "clean", "-fdq", "--", ".", f":(exclude){QA_DIR}")
+    else:
+        _git(ws, "reset", "-q", "--hard", before_head)
+        _git(ws, "clean", "-fdq")
+
+
+def _worktree_id(ws):
+    """A git tree id of the workspace AS IT IS, uncommitted changes included (a throwaway index, so the real
+    index is never touched). Equal ids = the same content was checked."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(d, "index"))
+        for args in (["read-tree", "HEAD"], ["add", "-A"]):
+            subprocess.run(["git", *args], cwd=ws, env=env, capture_output=True, text=True)
+        return subprocess.run(["git", "write-tree"], cwd=ws, env=env, capture_output=True, text=True).stdout.strip()
+
+
 def protect_qa(ws, task_id):
     """Developer must not touch qa_tests/. Revert any change and raise an alert."""
     bad = [f for f in _changed(ws) if _is_qa(f)]
@@ -194,7 +231,8 @@ def _load_progress(tdir):
     # code - missing a key added since, like "security_done" in Phase 5 - resumes instead of a KeyError
     # the first time that key is read.
     defaults = {"plan_done": False, "item": 0, "step": "dev", "fix": 0, "last_report": None, "runs": 0, "replans": 0,
-                "reports": 0, "completed": {}, "final_done": False, "security_done": False, "last_files": [], "req_hash": None}
+                "reports": 0, "completed": {}, "final_done": False, "security_done": False, "final_tree": None,
+                "security_tree": None, "last_files": [], "req_hash": None}
     p = tdir / "progress.json"
     if p.exists():
         defaults.update(json.loads(p.read_text(encoding="utf-8")))
@@ -211,9 +249,20 @@ def _item_hash(wi):
     return hashlib.sha256(json.dumps(wi, sort_keys=True).encode()).hexdigest()[:12]
 
 
+UNVERIFIABLE_BACKENDS = {"sdk"}      # builds no tool log (live-verified): every tester report would fail closed
+
+
+def refuse_unverifiable_backend(backend):
+    """Phase 5 review: `--backend sdk` spent real calls (intake, plan, build) before the tester's evidence check
+    failed closed on the missing tool log. Refuse it before the first call; live_smoke.py keeps it."""
+    if getattr(backend, "name", None) in UNVERIFIABLE_BACKENDS:
+        raise ValueError(f"backend '{backend.name}' builds no tool log, so no tester report can be verified: use the cli backend")
+
+
 def run_task(task_id, requirements, *, backend, title=None, env=None, settings_paths=None, limits=None, seed=None):
     """Run or resume one task. Returns {"status", "state", "message", "report"}."""
     logger.safe_task_id(task_id)
+    refuse_unverifiable_backend(backend)            # the caller's bug, like bad requirements: raise before any call
     tdir = config.home() / "tasks" / task_id
     tdir.mkdir(parents=True, exist_ok=True)
     schema.validate("requirements", requirements)   # bad input is the caller's bug: raise, do not log a task failure
@@ -282,6 +331,14 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         prog["final_done"] = False
         prog["security_done"] = False
         prog["req_hash"] = req_hash
+    # Phase 5 review: both checks were tied to the requirement only, not to the code they checked. A manual fix
+    # after a security failure re-ran security but not the regression; a changed workspace after both passed
+    # reached review with no check at all. Each pass now records the exact content it checked.
+    wid = _worktree_id(ws)
+    if prog["final_done"] and prog.get("final_tree") != wid:
+        prog["final_done"] = prog["security_done"] = False
+    elif prog["security_done"] and prog.get("security_tree") != wid:
+        prog["security_done"] = False
     save = lambda: _save(tdir / "progress.json", prog)
     _save(tdir / "requirements.json", req)
     req_view = {"goal": req["goal"], "risks": req["risks"],
@@ -335,29 +392,47 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
                 "acceptance_criteria": [{"id": f"{wi['id']}.{i + 1}", "text": t} for i, t in enumerate(wi["acceptance_criteria"])],
                 "original_criteria": [{"id": c, "text": ac[c]} for c in wi["covers"]]}
 
+    def guarded_call(role, calls, keep_qa):
+        """Run a role that must not change product files and check the workspace AFTERWARDS - also when the
+        call itself failed (a rejected report, a timeout, a usage limit). Phase 5 review: the check used to
+        sit after a successful return only, so a role that changed files AND produced an invalid report kept
+        its changes."""
+        before = _head(ws)
+        try:
+            out, err = calls(), None
+        except BaseException as e:           # every exception: KeyboardInterrupt included, it is re-raised below
+            out, err = None, e
+        protect_config(ws, task_id, role)
+        mutated = _agent_mutations(ws, before, keep_qa)
+        if mutated:
+            _revert_agent_changes(ws, before, keep_qa)
+            logger.log_event(task_id, "orchestrator", "alert", f"{role} changed files it must not change: reverted, report invalid",
+                             status="blocked", payload={"files": mutated, "call_error": str(err)[:300] if err else None})
+            if err is None or isinstance(err, StepFailed):
+                raise StepFailed(f"{role} modified product files {mutated}: report discarded" + (f" (and: {err})" if err else ""))
+        if err is not None:
+            raise err
+        return out
+
     def tester_call(view, expected, constraint_ids, test_strategy, files):
         payload = {"work_item": view, "constraints": req_view["constraints"], "test_strategy": test_strategy, "files_changed": files}
 
         def post(res):
             return semantics.process_test_report(res.output, expected, constraint_ids, res.tool_log)
-        rep = agent("tester", payload, post_process=post)
-        # A report that only MISSES coverage (nothing skipped, nothing failed) is a tester omission, not a question for
-        # the user. Ask the tester once to complete it. One extra call is cheaper than stopping the whole task.
-        if rep["verdict"] == "blocked" and rep.get("gaps") and not any(c["result"] == "skipped" for c in rep["checks"]):
-            logger.log_event(task_id, "orchestrator", "decision", f"tester report incomplete: asking once to complete it ({len(rep['gaps'])} gaps)",
-                             status="pending", payload={"gaps": rep["gaps"]})
-            rep = agent("tester", dict(payload, rejection={"gaps": rep["gaps"], "instruction":
-                        "Your previous report was incomplete. Run the missing checks now and report them in `checks`, with the ids in "
-                        "`criterion_ids`. Mark a constraint not applicable only in `constraints_na` with a reason. "
-                        "Statements in `summary` do not count."}), post_process=post)
-        protect_config(ws, task_id, "tester")
-        mutated = [f for f in _changed(ws) if not _is_qa(f)]
-        if mutated:                                  # tester must not edit product code
-            _git(ws, "checkout", "--", ".", f":(exclude){QA_DIR}")
-            _git(ws, "clean", "-fdq", "--", ".", f":(exclude){QA_DIR}")
-            logger.log_event(task_id, "orchestrator", "alert", "tester changed product files: reverted, report invalid",
-                             status="blocked", payload={"files": mutated})
-            raise StepFailed(f"tester modified product files {mutated}: report discarded")
+
+        def calls():
+            rep = agent("tester", payload, post_process=post)
+            # A report that only MISSES coverage (nothing skipped, nothing failed) is a tester omission, not a question
+            # for the user. Ask the tester once to complete it. One extra call is cheaper than stopping the whole task.
+            if rep["verdict"] == "blocked" and rep.get("gaps") and not any(c["result"] == "skipped" for c in rep["checks"]):
+                logger.log_event(task_id, "orchestrator", "decision", f"tester report incomplete: asking once to complete it ({len(rep['gaps'])} gaps)",
+                                 status="pending", payload={"gaps": rep["gaps"]})
+                rep = agent("tester", dict(payload, rejection={"gaps": rep["gaps"], "instruction":
+                            "Your previous report was incomplete. Run the missing checks now and report them in `checks`, with the ids in "
+                            "`criterion_ids`. Mark a constraint not applicable only in `constraints_na` with a reason. "
+                            "Statements in `summary` do not count."}), post_process=post)
+            return rep
+        rep = guarded_call("tester", calls, keep_qa=True)
         commit_changes(ws, f"qa: {view['id']}", only=_is_qa)
         prog["reports"] += 1
         (tdir / "reports").mkdir(exist_ok=True)
@@ -377,15 +452,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
 
         def post(res):
             return semantics.process_security_report(res.output, ws)
-        rep = agent("security", payload, post_process=post)
-        protect_config(ws, task_id, "security")
-        mutated = [f for f in _changed(ws) if not _is_qa(f)]
-        if mutated:                                  # the security reviewer must not edit anything either
-            _git(ws, "checkout", "--", ".", f":(exclude){QA_DIR}")
-            _git(ws, "clean", "-fdq", "--", ".", f":(exclude){QA_DIR}")
-            logger.log_event(task_id, "orchestrator", "alert", "security reviewer changed files: reverted, report invalid",
-                             status="blocked", payload={"files": mutated})
-            raise StepFailed(f"security reviewer modified files {mutated}: report discarded")
+        rep = guarded_call("security", lambda: agent("security", payload, post_process=post), keep_qa=False)
         _save(tdir / "security_report.json", rep)
         logger.log_event(task_id, "security", "test_run", f"verdict {rep['verdict']} ({len(rep['findings'])} finding(s))",
                          status="ok" if rep["verdict"] == "pass" else "error", payload={"verdict": rep["verdict"]})
@@ -448,6 +515,13 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
 
     # ---- final regression: every original criterion and constraint, on the finished workspace
     if not prog["final_done"]:
+        # Uncommitted changes here can only be a human's manual fix (every agent step commits or reverts its own).
+        # Commit them so they are tested, security-reviewed and delivered - and so the tester's own change check
+        # does not mistake them for edits by the tester and revert them.
+        manual = commit_changes(ws, "manual: uncommitted workspace changes before the final regression")
+        if manual:
+            logger.log_event(task_id, "orchestrator", "alert", f"committed {len(manual)} uncommitted file(s) found before the final regression",
+                             status="ok", payload={"files": manual})
         tasks.set_state(task_id, "test", title=title, current_agent="tester")
         final_view = {"id": "FINAL", "title": "Full regression of the finished workspace", "files": [], "depends_on": [],
                       "acceptance_criteria": req_view["acceptance_criteria"], "original_criteria": []}
@@ -456,7 +530,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
             raise NeedsInput(f"tester could not complete the final regression: {rep['summary']}")
         if rep["verdict"] == "fail":
             raise StepFailed(f"final regression failed: {rep['summary']}")
-        prog["final_done"] = True
+        prog["final_done"], prog["final_tree"] = True, _worktree_id(ws)
         save()
 
     # ---- security review: once, on the whole finished workspace (Phase 5). Never auto-blocks on its own
@@ -472,7 +546,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         if rep["verdict"] == "fail":
             raise StepFailed(f"security review found {sum(1 for f in rep['findings'] if f['severity'] in ('high', 'critical'))} "
                              f"high/critical finding(s): {rep['summary']}")
-        prog["security_done"] = True
+        prog["security_done"], prog["security_tree"] = True, _worktree_id(ws)
         save()
     tasks.set_state(task_id, "review", title=title, current_agent=None, waiting_approval=True)
     (tdir / "summary.md").write_text(

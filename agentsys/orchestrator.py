@@ -8,6 +8,7 @@ nothing expensive when nothing changed. States that wait for a human: waiting_ap
 Delivery policy (Phase 3): an approved merge produces PATCH FILES and, optionally, a NEW BRANCH `agentsys/<task>`
 in a target repo. It never merges into main and never pushes.
 """
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -127,10 +128,16 @@ def _retry(task_id, answer=None):
     return entry
 
 
-def _security_summary(tdir):
+SECURITY_SHOWN = 10            # findings listed in the approval itself; the full report is always named
+SECURITY_DESC_CHARS = 200
+
+
+def _security_summary(task_id, tdir):
     # A high/critical finding already stopped the task before it could reach review (loop.py's
     # security_call), so only low/medium findings - real but not blocking - can appear here. Surfaced to
     # the human approving the merge instead of being silently dropped once they stop blocking anything.
+    # Phase 5 review: an unbounded list could be cut off by the 4000-character approval limit, silently.
+    # Every line is bounded now, and the full report is always named.
     p = tdir / "security_report.json"
     if not p.exists():
         return "Security review: no report (task predates Phase 5, or a prior error)."
@@ -138,16 +145,22 @@ def _security_summary(tdir):
     findings = rep.get("findings") or []
     if not findings:
         return "Security review: no findings."
-    lines = [f"- [{f['severity']}] {f['category']} in {f['file']}" + (f":{f['line']}" if f.get("line") else "") + f" - {f['description']}"
-             for f in findings]
-    return "Security review findings (none blocking):\n" + "\n".join(lines)
+    lines = []
+    for f in findings[:SECURITY_SHOWN]:
+        desc = f["description"] if len(f["description"]) <= SECURITY_DESC_CHARS else f["description"][:SECURITY_DESC_CHARS] + "..."
+        lines.append(f"- [{f['severity']}] {f['category']} in {f['file']}" + (f":{f['line']}" if f.get("line") else "") + f" - {desc}")
+    if len(findings) > SECURITY_SHOWN:
+        lines.append(f"- ... and {len(findings) - SECURITY_SHOWN} more")
+    return (f"Security review: {len(findings)} finding(s), none blocking. Full report: tasks/{task_id}/security_report.json\n"
+            + "\n".join(lines))
 
 
 def _merge_context(task_id, tdir):
     summary = (tdir / "summary.md").read_text(encoding="utf-8") if (tdir / "summary.md").exists() else ""
     ws = tdir / "workspace"
     stat = loop._git(ws, "diff", "--stat", f"{_base(ws)}..HEAD", "--", ".", *JUNK).stdout.strip()
-    return (f"{summary}\nChanged files:\n{stat}\n\n{_security_summary(tdir)}\n\n"
+    # Security comes before the file list: the file list is the part that may be long.
+    return (f"{summary}\n{_security_summary(task_id, tdir)}\n\nChanged files:\n{stat}\n\n"
             f"Approving prepares patch files (and a branch `agentsys/{task_id}` if a target repo was given). Nothing is merged into main.")
 
 
@@ -164,7 +177,11 @@ def _merge_diff_ref(task_id, tdir):
     ws_sha = loop._git(ws, "rev-parse", "HEAD").stdout.strip()
     prog_path = tdir / "progress.json"
     req_hash = json.loads(prog_path.read_text(encoding="utf-8")).get("req_hash") if prog_path.exists() else None
-    return f"git:{ws_sha}:req:{req_hash}"
+    # Phase 5 review: the security report is part of what the human approves. An approval made before it
+    # existed (or for a different report) for the same commit used to stay valid.
+    sec = tdir / "security_report.json"
+    sec_hash = hashlib.sha256(sec.read_bytes()).hexdigest()[:16] if sec.exists() else "none"
+    return f"git:{ws_sha}:req:{req_hash}:sec:{sec_hash}"
 
 
 def _delivery_journal(tdir):
@@ -267,6 +284,7 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
         raise KeyError(task_id)
     if entry["status"] in ("done", "rejected"):
         return entry
+    loop.refuse_unverifiable_backend(backend)        # before intake: intake is a real call too
     tdir = config.home() / "tasks" / task_id
     kw = dict(env=env, settings_paths=settings_paths)
 

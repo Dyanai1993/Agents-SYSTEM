@@ -10,6 +10,7 @@ import re
 from . import config, logger, schema
 
 ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+CONTEXT_MAX = 4000
 
 
 class ApprovalError(ValueError):
@@ -74,7 +75,9 @@ def request(task_id, gate, context, diff_ref=None, new=False):
     if doc and not stale and (st in ("pending", "approved") or not new):
         return doc
     n = len(_requests_for(task_id, gate)) + 1
-    doc = {"id": f"{task_id}-{gate}-{n}", "task_id": task_id, "gate": gate, "context": context[:4000],
+    if len(context) > CONTEXT_MAX:               # never cut silently: say that something is missing
+        context = context[:CONTEXT_MAX - 60] + "\n...[cut: context longer than 4000 characters]"
+    doc = {"id": f"{task_id}-{gate}-{n}", "task_id": task_id, "gate": gate, "context": context,
            "created_at": logger.now(), "diff_ref": diff_ref}
     schema.validate("approval_request", doc)
     (_dir("pending") / f"{doc['id']}.json").write_text(json.dumps(doc, indent=2), encoding="utf-8")

@@ -204,7 +204,7 @@ class LoopTests(TmpHome):
             (self.ws() / "app.py").write_text("API_KEY = 'sk-real-secret'\n"); return DEV
         sec = {"verdict": "pass", "summary": "looks fine",   # under-reported on purpose: code derives the real verdict
                "findings": [{"severity": "critical", "category": "secret leak", "file": "app.py",
-                             "description": "a real key is committed", "evidence": "API_KEY = 'sk-real-secret'"}]}
+                             "description": "a real key is committed", "evidence": "API_KEY = '[REDACTED]'"}]}
         fb = runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass, "security": sec})
         r = go("t1", fb)
         self.assertEqual(r["status"], "blocked")
@@ -225,8 +225,92 @@ class LoopTests(TmpHome):
             (self.ws() / "app.py").write_text("real"); return DEV
         fb = runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass, "security": security})
         r = go("t1", fb)
-        self.assertEqual(r["status"], "blocked"); self.assertIn("security reviewer modified files", r["message"])
+        self.assertEqual(r["status"], "blocked"); self.assertIn("security modified product files", r["message"])
         self.assertEqual((self.ws() / "app.py").read_text(), "real")
+
+    def _dev_real(self, tid="t1"):
+        def dev(prompt):
+            (self.ws(tid) / "app.py").write_text("real\n"); return DEV
+        return dev
+
+    def _sec_doing(self, action, reply=None, tid="t1"):
+        def security(prompt):
+            action(self.ws(tid))
+            return reply or {"verdict": "pass", "summary": "ok", "findings": []}
+        return security
+
+    def test_security_cannot_hide_changes_in_qa_tests_the_index_or_a_commit(self):
+        """Phase 5 review: the guard skipped qa_tests/ (fine for the tester, which writes tests there; the
+        security reviewer may write nothing), restored a STAGED change from the already-changed index, and
+        saw nothing at all after a commit the reviewer made itself."""
+        def qa(ws):
+            (ws / "qa_tests").mkdir(exist_ok=True); (ws / "qa_tests" / "x.py").write_text("planted")
+        def staged(ws):
+            (ws / "app.py").write_text("staged by security\n"); loop._git(ws, "add", "app.py")
+        def committed(ws):
+            (ws / "app.py").write_text("committed by security\n"); loop._git(ws, "commit", "-qam", "sneaky")
+        for name, action in (("qa", qa), ("staged", staged), ("committed", committed)):
+            with self.subTest(name):
+                tid = f"t-{name}"
+                fb = runner.FakeBackend({"architect": plan(1), "developer": self._dev_real(tid), "tester": t_pass,
+                                         "security": self._sec_doing(action, tid=tid)})
+                r = go(tid, fb)
+                self.assertEqual(r["status"], "blocked", name); self.assertIn("security modified product files", r["message"])
+                ws = self.ws(tid)
+                self.assertEqual((ws / "app.py").read_text(), "real\n", name)
+                self.assertFalse((ws / "qa_tests" / "x.py").exists(), name)
+                self.assertNotIn("sneaky", loop._git(ws, "log", "--format=%s").stdout, name)
+                self.assertEqual(loop._changed(ws), [], name)
+
+    def test_changes_are_reverted_even_when_the_report_itself_is_invalid(self):
+        """Phase 5 review: the check ran only after a VALID report, so a role that changed files and then
+        failed validation kept its changes. Same gap in the tester's own guard (pre-Phase 5), fixed with it."""
+        bad_sec = {"verdict": "fail", "summary": "s", "findings": []}       # schema-invalid: fail with no finding
+        fb = runner.FakeBackend({"architect": plan(1), "developer": self._dev_real(), "tester": t_pass,
+                                 "security": self._sec_doing(lambda ws: (ws / "app.py").write_text("tampered\n"), bad_sec)})
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "blocked")
+        self.assertEqual((self.ws() / "app.py").read_text(), "real\n")
+        def lying_tester(prompt):
+            (self.ws("t2") / "app.py").write_text("tampered by tester\n")
+            return report("pass", [_check("x", "pass", [c["id"] for c in json.loads(prompt)["work_item"]["acceptance_criteria"]],
+                                          command="never-run", evidence="this output was never produced")])
+        r = go("t2", runner.FakeBackend({"architect": plan(1), "developer": lambda p: ((self.ws("t2") / "app.py").write_text("real\n"), DEV)[1],
+                                         "tester": lying_tester}, tool_logs={"tester": []}))     # it ran nothing
+        self.assertEqual(r["status"], "blocked"); self.assertIn("modified product files", r["message"])
+        self.assertEqual((self.ws("t2") / "app.py").read_text(), "real\n")
+
+    def test_a_manual_fix_after_a_security_failure_reruns_the_regression_too(self):
+        """Phase 5 review: 'done' flags were tied to the requirement, not to the code. A manual fix after a
+        security failure re-ran only security, never the final regression."""
+        def dev(p):
+            (self.ws() / "app.py").write_text("API_KEY = 'sk-real-secret'\n"); return DEV
+        sec_fail = {"verdict": "fail", "summary": "secret", "findings": [{"severity": "critical", "category": "secret leak",
+                    "file": "app.py", "description": "d", "evidence": "API_KEY = '[REDACTED]'"}]}
+        self.assertEqual(go("t1", runner.FakeBackend({"architect": plan(1), "developer": dev, "tester": t_pass, "security": sec_fail}))["status"], "blocked")
+        (self.ws() / "app.py").write_text("API_KEY = os.environ['API_KEY']\n")        # the human's fix, not committed
+        fb2 = runner.FakeBackend({"tester": t_pass})
+        self.assertEqual(go("t1", fb2)["status"], "ready_for_review")
+        self.assertEqual(roles(fb2), ["tester", "security"])                            # FINAL regression again, then security
+        self.assertIn("manual: uncommitted", loop._git(self.ws(), "log", "--format=%s").stdout)   # the fix is delivered
+        self.assertEqual(loop._changed(self.ws()), [])
+
+    def test_a_changed_workspace_after_review_is_checked_again(self):
+        fb = runner.FakeBackend({"architect": plan(1), "developer": self._dev_real(), "tester": t_pass})
+        self.assertEqual(go("t1", fb)["status"], "ready_for_review")
+        fb_same = runner.FakeBackend({})
+        self.assertEqual(go("t1", fb_same)["status"], "ready_for_review"); self.assertEqual(fb_same.calls, [])   # unchanged: free
+        (self.ws() / "app.py").write_text("changed later\n"); loop._git(self.ws(), "commit", "-qam", "later")
+        fb2 = runner.FakeBackend({"tester": t_pass})
+        self.assertEqual(go("t1", fb2)["status"], "ready_for_review")
+        self.assertEqual(roles(fb2), ["tester", "security"])
+
+    def test_the_sdk_backend_is_refused_before_any_call(self):
+        """Phase 5 review: SdkBackend builds no tool log, so every tester report fails closed - after intake,
+        plan and build had already spent real calls."""
+        with self.assertRaises(ValueError):
+            go("t1", runner.SdkBackend())
+        self.assertFalse((self.home / "tasks/t1/budget.json").exists())
 
     def test_security_report_is_saved_and_surfaced_at_the_merge_gate(self):
         from agentsys import orchestrator
@@ -492,25 +576,33 @@ class SemanticsTests(unittest.TestCase):
         wrong = report("pass", [_check("x", "pass", ["W1.1"], command='python -c "print(1)"', evidence="result: 'bad'")])
         self.assertTrue(semantics.evidence_errors(wrong, log, strict=True))
 
-    def test_evidence_split_by_dots_may_span_two_real_sections_in_order(self):
-        """Live (first real Phase 5 task, T-0023): a check covering two scenarios quoted two genuinely
-        non-adjacent real excerpts from two labelled sections of one batched script, joined by one "...".
-        Both pieces were real and accurate - rejecting this punished an honest report."""
-        log = [{"tool": "Bash", "command": "r", "output":
-                "F:\nusage: validate_emails.py FILE\nrc=2\nG:\nerror: cannot read /tmp/x/nope: [Errno 2] No such file\nrc=2"}]
-        honest = report("pass", [_check("x", "pass", ["W1.1"], command="r",
-                         evidence="usage: validate_emails.py FILE ... error: cannot read ... rc=2")])
-        self.assertEqual(semantics.evidence_errors(honest, log, strict=True), [])
-        # the LAST piece is still checked for real: a wrong final value (not genuinely in the output) is rejected
-        wrong_last = report("pass", [_check("x", "pass", ["W1.1"], command="r",
-                             evidence="usage: validate_emails.py FILE ... error: cannot read ... rc=99")])
-        self.assertTrue(semantics.evidence_errors(wrong_last, log, strict=True))
-        # pieces must appear in the CLAIMED order, not just anywhere: swapped order is rejected
-        swapped = report("pass", [_check("x", "pass", ["W1.1"], command="r",
-                          evidence="error: cannot read ... usage: validate_emails.py FILE ... rc=2")])
-        self.assertTrue(semantics.evidence_errors(swapped, log, strict=True))
-        # the overall length gate still applies: splitting into many trivial pieces cannot dodge it
-        self.assertFalse(semantics._evidence_in_output("a...b...c", semantics._squash(log[0]["output"])))
+    def test_dots_cannot_join_a_label_to_a_value_from_elsewhere(self):
+        """Phase 5 review: matching "..."-separated pieces one by one (added after live run T-0023) let a
+        label from one line be joined to a value from another, so a real FAIL read as PASS."""
+        out = "test_result: FAIL\nexpected result: PASS"
+        log = [{"tool": "Bash", "command": "python -m unittest", "output": out}]
+        joined = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="test_result: ... PASS")])
+        self.assertTrue(semantics.evidence_errors(joined, log, strict=True))
+        self.assertFalse(semantics._evidence_in_output("a...b...c...d...e...f", semantics._squash("a1 b2 c3 d4 e5 f6")))
+        # T-0023's two-scenario evidence is rejected again; the tester prompt now asks for one check per scenario,
+        # each with ONE excerpt - and that form passes
+        t23 = "F:\nusage: validate_emails.py FILE\nrc=2\nG:\nerror: cannot read /tmp/x/nope: [Errno 2] No such file\nrc=2"
+        log23 = [{"tool": "Bash", "command": "r", "output": t23}]
+        two_in_one = report("pass", [_check("x", "pass", ["W1.1"], command="r",
+                             evidence="usage: validate_emails.py FILE ... error: cannot read ... rc=2")])
+        self.assertTrue(semantics.evidence_errors(two_in_one, log23, strict=True))
+        split = report("pass", [_check("no argument", "pass", ["W1.1"], command="r", evidence="usage: validate_emails.py FILE"),
+                                _check("missing file", "pass", ["W1.1"], command="r", evidence="error: cannot read /tmp/x/nope")])
+        self.assertEqual(semantics.evidence_errors(split, log23, strict=True), [])
+
+    def test_quote_presence_still_matters(self):
+        """Phase 5 review: deleting every quote character let evidence with a DIFFERENT meaning match: a
+        JSON string read as a boolean. Quote style is unified now, quote presence is kept."""
+        log = [{"tool": "Bash", "command": "cat cfg.json", "output": '{"enabled": "false"}'}]
+        as_bool = report("pass", [_check("x", "pass", ["W1.1"], command="cat cfg.json", evidence='{"enabled": false}')])
+        self.assertTrue(semantics.evidence_errors(as_bool, log, strict=True))
+        other_style = report("pass", [_check("x", "pass", ["W1.1"], command="cat cfg.json", evidence="{'enabled': 'false'}")])
+        self.assertEqual(semantics.evidence_errors(other_style, log, strict=True), [])
 
     def test_command_matching_ignores_whitespace(self):
         r = report("pass", [_check("a", "pass", ["W1.1"], command="python  -m   unittest")])
@@ -545,12 +637,29 @@ class SemanticsTests(unittest.TestCase):
         self.assertTrue(semantics.security_evidence_errors(hallucinated, ws))
         missing_file = {"verdict": "fail", "summary": "s", "findings": [self._finding(file="nope.py")]}
         self.assertTrue(semantics.security_evidence_errors(missing_file, ws))
-        # quote style differs from the real file - still accepted (same norm() used for commands/output)
+        # Phase 5 review: adding quotes changes the code's meaning (a variable became a literal) - rejected
         requoted = {"verdict": "fail", "summary": "s", "findings": [self._finding(evidence='os.system("cmd")')]}
-        self.assertEqual(semantics.security_evidence_errors(requoted, ws), [])
+        self.assertTrue(semantics.security_evidence_errors(requoted, ws))
+        # only the quote STYLE may differ
+        ws2 = self._ws({"app.py": 'os.system("rm " + name)\n'})
+        restyled = {"verdict": "fail", "summary": "s", "findings": [self._finding(evidence="os.system('rm ' + name)")]}
+        self.assertEqual(semantics.security_evidence_errors(restyled, ws2), [])
         # low/medium findings are not evidence-checked at all
         low = {"verdict": "pass", "summary": "s", "findings": [self._finding(severity="low", evidence="invented, never in the file")]}
         self.assertEqual(semantics.security_evidence_errors(low, ws), [])
+
+    def test_a_redacted_secret_is_still_checked_against_its_real_line(self):
+        """Phase 5 review: the prompt says never to copy a secret into the report, but the exact-quote check
+        rejected every masked quote. [REDACTED] is now allowed - the rest of the line must still be real."""
+        ws = self._ws({"cfg.py": 'import os\nAPI_KEY = "sk-live-abcdef123456"\nDEBUG = True\n'})
+        def check(evidence):
+            return semantics.security_evidence_errors(
+                {"verdict": "fail", "summary": "s", "findings": [self._finding(severity="critical", file="cfg.py", evidence=evidence)]}, ws)
+        self.assertEqual(check('API_KEY = "[REDACTED]"'), [])
+        self.assertTrue(check('SECRET_KEY = "[REDACTED]"'))                 # wrong text around the mask
+        self.assertTrue(check('import [REDACTED] = True'))                  # pieces from different lines
+        self.assertTrue(check('API_KEY = "sk-...redacted"'))               # the old, unchecked form
+        self.assertTrue(check('[REDACTED]'))                               # nothing real left to check
 
     def test_security_finding_cannot_escape_the_workspace(self):
         ws = self._ws({"app.py": "x = 1\n"})
@@ -597,6 +706,16 @@ class PromptTests(TmpHome):
             self.assertTrue(blocks, role)
             for b in blocks:
                 self.assertEqual(schema.errors_for(name, json.loads(b)), [], f"{role}: {b[:60]}")
+
+    def test_review_document_is_in_sync_with_prompts_schemas_and_code(self):
+        """Phase 5 review: docs/agent-prompts-for-review.md still held the old evidence-matching code."""
+        import importlib.util
+        from pathlib import Path
+        path = Path(__file__).resolve().parent.parent / "scripts" / "gen_prompt_review.py"
+        spec = importlib.util.spec_from_file_location("gen_prompt_review", path)
+        gen = importlib.util.module_from_spec(spec); spec.loader.exec_module(gen)
+        self.assertEqual(gen.DEST.read_text(encoding="utf-8"), gen.render(),
+                         "out of date: run `python scripts/gen_prompt_review.py`")
 
     def test_runner_sends_the_role_prompt(self):
         seen = {}
