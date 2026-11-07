@@ -384,7 +384,7 @@ function previewCard(id,pv){
   if(s.can_build)row.append(btn(b.state==="running"?"Building...":"Build again",()=>send("build","Build started: it runs the project's own build script."),s.root?"":"primary"));
   c.append(row);
   const info=[];
-  if(s.root)info.push("Shows "+(s.app_dir?"the last build ("+s.root.replace(/^.*[\/]workspace[\/]/,"")+")":s.entry)+(s.built_at?", made "+ago((Date.now()/1000-s.built_at)/60):""));
+  if(s.root)info.push("Shows "+(s.app_dir?"the last build ("+s.root.split(/[\\/]workspace[\\/]/).pop()+")":s.entry)+(s.built_at?", made "+ago((Date.now()/1000-s.built_at)/60):""));
   else info.push("Not built yet: press Build again.");
   if(s.can_build&&!s.has_deps)info.push("The dependencies are not installed: run npm install in "+s.app_dir+".");
   c.append(el("div",{class:"mut small",style:"margin-top:6px"},info.join(" ")+" The app runs from its own local address, apart from the dashboard; Build again runs the project's own build script on this computer."));
