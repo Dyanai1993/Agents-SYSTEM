@@ -15,3 +15,8 @@ memory/inbox/*
 memory/proposals/
 memory/lessons.md
 memory/lessons.md.tmp
+state/worker.lock
+state/workers/
+requests/
+trash/
+drafts/

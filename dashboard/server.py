@@ -1,4 +1,4 @@
-"""Local dashboard server. Read-only in Phase 1. Binds to 127.0.0.1 only. No LLM, no network."""
+"""Local dashboard server. Binds to 127.0.0.1 only. No LLM, no network: it reads files and writes request files."""
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -6,9 +6,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agentsys import actions, dashboard_data as d  # noqa: E402
+from agentsys import actions, dashboard_data as d, worker  # noqa: E402
 
 INDEX = Path(__file__).with_name("index.html")
+SERVER_BUILD = worker.build_id()        # the code this server started with: the page says when it is out of date
 
 
 class H(BaseHTTPRequestHandler):
@@ -38,6 +39,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, INDEX.read_bytes(), "text/html")
             if u.path == "/api/overview":
                 return self._send(200, d.overview())
+            if u.path == "/api/worker":
+                return self._send(200, worker.status(server_build=SERVER_BUILD))
             if u.path == "/api/events":
                 return self._send(200, d.query_events(q.get("task"), q.get("agent"), q.get("type"), q.get("q")))
             if u.path == "/api/messages":

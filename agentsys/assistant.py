@@ -246,12 +246,15 @@ def _pending(now):
     return [sid for _, sid in sorted(out)]
 
 
-def process_next_turn(*, backend, env=None, settings_paths=None, now=None, locked=False):
+def process_next_turn(*, backend, env=None, settings_paths=None, now=None, locked=False, on_job=None):
     """Answer the oldest pending user message: exactly one model call. None when nothing waits.
-    locked=True: the caller (scheduler.run_next) already holds exec_lock()."""
+    locked=True: the caller (scheduler.run_next) already holds exec_lock(). on_job(kind, id) is told which draft is
+    being answered (the worker's heartbeat shows it)."""
     queue = _pending(time.time() if now is None else now)
     if not queue:
         return None
+    if on_job:
+        on_job("draft", queue[0])
     if locked:
         return _run_turn(queue[0], backend, env, settings_paths)
     lock = exec_lock()

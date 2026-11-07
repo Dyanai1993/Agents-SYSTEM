@@ -21,6 +21,10 @@ textarea:disabled{opacity:.7}
 .msg.err{border-color:var(--bad)}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:6px 0 0}
 details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
 [hidden]{display:none!important}.small{font-size:12px}
+.wbar{flex-basis:100%;display:flex;gap:8px;align-items:center;font-size:13px}.wbar i{width:9px;height:9px;border-radius:50%;flex:none;background:var(--mut)}
+.wbar.ok i{background:var(--ok)}.wbar.warn i{background:var(--warn)}.wbar.bad i{background:var(--bad)}.wbar.bad span{color:var(--bad)}
+button.primary{background:var(--acc);color:var(--onacc);border:1px solid var(--acc);border-radius:8px;padding:6px 16px;cursor:pointer;font:inherit}
+button.primary:disabled{opacity:.45;cursor:default}
 /* Requirements Assistant chat */
 .awrap{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}.awrap>.card{flex:1 1 400px;min-width:0}
 .chat{display:flex;flex-direction:column}
@@ -48,7 +52,8 @@ button.chip{cursor:pointer}button.chip:hover{background:color-mix(in srgb,var(--
 </style></head><body>
 <header><h1>Agent Dashboard</h1>
 <nav><button data-v="assistant">New task</button><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="learning">Learning</button><button data-v="alerts">Alerts</button></nav>
-<span class="mut" id="stamp"></span></header>
+<span class="mut" id="stamp"></span>
+<div id="wbar" class="wbar" role="status" aria-live="polite"></div></header>
 <main id="m"></main>
 <script>
 "use strict";
@@ -267,10 +272,52 @@ async function messages(){
   document.getElementById("list").replaceChildren(box.children.length?box:el("div",{class:"card"},"No messages."));
 }
 let curTask="",delAsk=null,taskNote=null;
+// The run card: what is happening right now and the ONE next action (Start / Continue / Resume / Retry / Answer /
+// Approvals). Every action only writes a request file; the worker does the work. The dashboard never calls a model.
+function runCard(t){
+  const r=t.run,id=t.task_id,c=el("div",{class:"card"},el("b",{},"Run"));
+  if(!r){c.append(el("div",{class:"mut"},"This task has no queue entry."));return c;}
+  const now=Date.now()/1000,st=r.status,req=r.request,asked=req&&["waiting","running"].includes(req.status);
+  const send=async(path,body,ok)=>{const x=await post(path,body);taskNote=x.ok?{cls:"ok",text:ok}:{cls:"bad",text:x.body.error};tick();};
+  const btn=(label,fn,primary)=>{const b=el("button",{class:primary?"primary":"",style:"margin:6px 6px 0 0"},label);b.onclick=async()=>{b.disabled=true;await fn();};return b;};
+  const info=el("div",{style:"margin-top:4px"});c.append(info);
+  if(r.running){const p=liveJob(id);
+    info.append(el("b",{class:"ok"},"Running now"),p&&p.job.agent?" - the "+p.job.agent+" is working":"",
+      p?el("span",{class:"mut"}," (run started ",el("span",{"data-since":p.job.since},dur(now-p.job.since))," ago; ",p.kind==="worker"?"worker":"run-next"," alive, heartbeat "+Math.round(p.age_s)+" s ago)"):"");
+    if(r.control_pending)c.append(el("div",{class:"warn"},r.control+" requested: the current agent call finishes first, then it "+(r.control==="stop"?"stops":"pauses")+"."));}
+  else if(asked)info.append(el("b",{class:"warn"},(req.action==="start"?"Start":req.action==="retry"?"Retry":"Continue")+" requested"),", waiting for the worker",req.note?": "+req.note:"",
+    workerOffline()?el("div",{class:"bad"},"The worker is offline, so nothing will happen yet. Start it: python scripts/up.py"):"");
+  else if(req&&req.status==="refused")info.append(el("b",{class:"bad"},"Your request was refused: "),req.note);
+  else info.append("Status: ",el("b",{},st),r.note?el("span",{class:"mut",dir:"auto"}," - "+r.note):"");
+  if(!r.running&&!asked){
+    if(!r.blocker){const first=st==="queued"&&!r.started;
+      c.append(el("div",{},btn(first?"Start":"Continue",()=>send("/api/task/run",{task_id:id,action:first?"start":"continue"},(first?"Start":"Continue")+" requested: the worker picks it up."),true),
+        el("span",{class:"mut small"},first?"The worker plans, builds and tests it until it needs you.":"It continues from the last checkpoint.")));}
+    else if(st==="stopped"||(st==="paused"&&r.blocker_needs_you))c.append(el("div",{},btn("Resume",()=>send("/api/control",{task_id:id,action:"resume"},"Resumed: press Continue to run it."),true)));
+    else if(st==="blocked")c.append(el("div",{},btn("Retry",()=>send("/api/task/run",{task_id:id,action:"retry"},"Retry requested: the worker continues from the last checkpoint."),true),el("span",{class:"mut small"},"Fix the cause first (see the note above).")));
+    else if(st==="needs_input")c.append(answerBox(id,r.note));
+    else if(st==="waiting_approval"||st==="needs_approval")c.append(el("div",{},el("span",{class:"warn"},r.blocker),btn("Open Approvals",()=>go("approvals"),true)));
+    else if(r.blocker)c.append(el("div",{class:r.blocker_needs_you?"mut":"warn"},r.blocker));}
+  if(!["done","rejected","stopped"].includes(st)){const row=el("div",{style:"margin-top:8px"});
+    if(st!=="paused")row.append(btn("Pause",()=>send("/api/control",{task_id:id,action:"pause"},"Pause requested.")));
+    row.append(btn("Stop",()=>send("/api/control",{task_id:id,action:"stop"},"Stop requested. Resume continues from the last checkpoint.")),
+      el("span",{class:"mut small"},r.running?"Pause and Stop act before the next agent call; the current one finishes first.":"Pause and Stop act at once; Resume undoes them."));
+    c.append(row);}
+  return c;}
+function answerBox(id,question){
+  const k="ans:"+id,t=el("textarea",{rows:3,dir:"auto","data-key":k,"aria-label":"Your answer",placeholder:"Your answer (up to 300 characters)",style:"width:100%;margin-top:6px"});
+  t.value=typed[k]||"";const cnt=el("span",{class:"mut"}),b=el("button",{class:"primary",style:"margin-top:6px"},"Send answer and continue");
+  const upd=()=>{const n=t.value.trim().replace(/\s+/g," ").length;cnt.textContent=n+" / 300";cnt.className=n>300?"bad":"mut";b.disabled=!n||n>300;};
+  t.oninput=()=>{typed[k]=t.value;upd();};upd();
+  b.onclick=async()=>{b.disabled=true;const x=await post("/api/task/answer",{task_id:id,answer:t.value});
+    if(x.ok){delete typed[k];taskNote={cls:"ok",text:x.body.request?"Answer saved: the worker continues the task.":x.body.note};}else taskNote={cls:"bad",text:x.body.error};tick();};
+  return el("div",{style:"margin-top:6px"},el("b",{},"The task asks you:"),el("div",{class:"msg",dir:"auto",style:"white-space:pre-wrap"},question||"(see the status report)"),t,
+    el("div",{class:"hint"},el("span",{class:"mut"},"Your answer is added to the requirement as a clarification."),cnt),b);}
 async function task(){
   const o=await get("/api/overview");
   if(!curTask&&o.tasks.length)curTask=o.tasks[o.tasks.length-1].task_id;   // the newest task
   const t=curTask?await get("/api/task?id="+encodeURIComponent(curTask)):null;   // fetch BEFORE clearing: no blank flash on refresh
+  const fs=saveFocus();   // the answer box keeps your typing, focus and cursor across the refresh
   m.replaceChildren();
   const sel=el("select",{style:"max-width:100%"});o.tasks.slice().reverse().forEach(x=>{const op=el("option",{value:x.task_id},x.task_id+" ["+(x.waiting_approval?"waiting for you":x.state)+"] "+x.title);if(x.task_id===curTask)op.selected=true;sel.append(op);});
   sel.onchange=()=>{curTask=sel.value;delAsk=null;taskNote=null;tick();};
@@ -281,11 +328,9 @@ async function task(){
   t.states.forEach((s,i)=>{const p=el("span",{class:"pill",style:"margin-right:4px;"+(s===cur?"background:var(--acc);color:#fff":"")},s);flow.append(p);});
   if(["blocked","failed","paused"].includes(cur))flow.append(el("span",{class:"pill bad"},cur));
   if(t.state.waiting_approval)flow.append(el("span",{class:"pill warn"},"waiting for approval"));
-  const ctl=el("div",{class:"card"});
-  [["pause","Pause"],["resume","Resume"],["stop","Stop"]].forEach(([a,l])=>{const b=el("button",{style:"margin-right:6px"},l);b.onclick=async()=>{if(a==="stop"&&!confirm("Stop task "+curTask+"?"))return;const r=await post("/api/control",{task_id:curTask,action:a});if(!r.ok)alert(r.body.error);tick();};ctl.append(b);});
-  ctl.append(el("span",{class:"mut"},"  (writes a control file; the loop reads it before every agent call)"));
+  const ctl=runCard(t);
   // delete: two steps, recoverable (moved to trash/), refused by the server while a run is processing the task
-  if(delAsk!==curTask){const d=el("button",{style:"margin-left:12px;color:var(--bad);border-color:var(--bad)"},"Delete task...");d.onclick=()=>{delAsk=curTask;tick();};ctl.append(d);}
+  if(delAsk!==curTask){const d=el("button",{style:"margin:6px 0 0 12px;color:var(--bad);border-color:var(--bad)"},"Delete task...");d.onclick=()=>{delAsk=curTask;tick();};ctl.append(d);}
   else{const id=curTask,yes=el("button",{style:"margin:6px 6px 0 0;color:var(--bad);border-color:var(--bad)"},"Yes, delete "+id),no=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
     yes.onclick=async()=>{yes.disabled=true;const r=await post("/api/task/delete",{task_id:id});delAsk=null;
       if(r.ok){curTask="";taskNote={cls:"ok",text:"Deleted "+id+". It was moved to "+r.body.moved_to+" - move it back to restore it."};}else taskNote={cls:"bad",text:"Not deleted: "+r.body.error};tick();};
@@ -294,8 +339,8 @@ async function task(){
       el("div",{},"It leaves the queue, the dashboard and the approvals list. Nothing is erased: the task folder (with its workspace) moves to trash/, so you can restore it. Patch files already delivered and the usage history are kept."),yes,no));}
   m.append(flow);
   if(t.attention)m.append(el("div",{class:"card alert",style:t.attention.level==="warn"?"border-color:var(--warn)":""},el("b",{},"Needs you: "),t.attention.text));
+  m.append(ctl);                    // what is happening and the next action, before the details
   m.append(requirementCard(t));
-  m.append(ctl);
   // plan and dependencies
   const wk=el("div",{class:"card"},el("b",{},"Plan and dependencies"),el("span",{class:"mut"},"  last activity "+ago(t.idle_min)));
   if(t.work.items.length){
@@ -331,6 +376,7 @@ async function task(){
   t.events.forEach(e=>tb.append(el("tr",{},el("td",{class:"mut"},e.ts.slice(11,19)),el("td",{},e.agent),el("td",{class:"mut"},e.model),el("td",{},el("span",{class:"pill"},e.event_type)),
     el("td",{},e.summary),el("td",{class:e.status==="error"||e.status==="blocked"?"bad":"ok"},e.status))));
   m.append(el("div",{class:"card"},tb));
+  restoreFocus(fs);
 }
 async function quality(){
   const r=await get("/api/quality");m.replaceChildren();
@@ -402,7 +448,13 @@ async function learning(){
   m.append(el("div",{class:"card"},el("b",{},"Real eval runs"),r.eval_runs.length?rt:el("div",{class:"mut"},"None yet. Run `python evals/run_evals.py real --label baseline --yes`.")));
 }
 const views={assistant:assistantView,overview,activity,messages,task,quality,approvals,usage,learning,alerts};
-async function tick(auto){try{const ap=await get("/api/approvals");const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view](auto);document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
+// The worker's heartbeat (state/workers/*.json): is anything alive, what is it doing, does it run current code.
+let workerState={processes:[],level:"warn",text:""};
+function renderWorker(w){workerState=w;const b=document.getElementById("wbar");b.className="wbar "+w.level;b.replaceChildren(el("i",{"aria-hidden":"true"}),el("span",{},w.text));}
+function liveJob(id){return (workerState.processes||[]).find(p=>p.alive&&p.job&&p.job.kind==="task"&&p.job.id===id);}
+function workerOffline(){return !(workerState.processes||[]).some(p=>p.alive&&p.kind==="worker");}
+function go(v){view=v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v===v));m.replaceChildren();tick();}
+async function tick(auto){try{const [ap,w]=await Promise.all([get("/api/approvals"),get("/api/worker")]);renderWorker(w);const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view](auto);document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
 // A rebuild closes an open native dropdown (seen: the task picker shut after a second): hold the refresh while a
 // dropdown is in use - from focus/click until you pick, leave it, or 15 s pass.

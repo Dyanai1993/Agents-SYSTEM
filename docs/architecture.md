@@ -110,3 +110,19 @@ The Approvals list shows only the latest request per task and gate (an older one
   folders with a `state.json`, so sessions never show as tasks.
 - After submission the draft is read-only (no post-submission editing in this version); the task's requirement card
   links back to the conversation. Execution questions use the existing `needs_input` / `retry --answer` flow.
+
+## The worker and its heartbeat (master prompt, phase A)
+- `agentsys/worker.py` is the only long-running process that calls a model. It answers Requirements Assistant turns
+  first, then runs ONE task the user requested (`requests/run/<task>.json`, written by Start / Continue / Retry /
+  Answer in the dashboard) as far as it goes without the human. It never picks a task on its own.
+- One worker at a time: an OS lock on `state/worker.lock`. One model call at a time across the worker and a terminal
+  `run-next`: `queue/_exec.lock` (unchanged).
+- Heartbeat: `state/workers/<instance>.json`, rewritten every 5 s by a thread (also during a long agent call):
+  kind, pid, the build id of the code it started with, and the current job (draft or task, since when). Stale after
+  20 s. The dashboard shows offline / idle / busy / crashed while doing X / old code / two workers, and a task is
+  "running" only while a live heartbeat names it - no more guessing "stuck?" after 30 quiet minutes.
+- `scheduler.run_blocker()` says why a task cannot run: a reason the human must act on refuses the request at once;
+  a reason that clears by itself (the usage window) keeps it waiting, with the reason shown.
+- `orchestrator.apply_control()`: pause / stop / resume take effect at once when no run holds the task (otherwise
+  before the next agent call, as before). Stop is reversible: resume requeues from the checkpoint.
+- `scripts/up.py` starts the dashboard and the worker together, after the billing guard.

@@ -459,7 +459,7 @@ class RequirementGateTests(TmpHome):
         self.assertIsNone(scheduler.pick())                                                  # nothing to run
         self.assertIn("review the requirement draft", dd.overview()["tasks"][0]["attention"]["text"])
         approvals.decide(approvals.latest("t1", "requirements")[0]["id"], "approved")
-        self.assertIn("requirement approved: continue", dd.overview()["tasks"][0]["attention"]["text"])
+        self.assertIn("requirement approved: press Continue", dd.overview()["tasks"][0]["attention"]["text"])
         self.assertEqual(scheduler.pick()["task_id"], "t1")
         e = proc("t1", f)
         self.assertEqual(e["status"], "waiting_approval"); self.assertIn("merge", e["note"])     # built, now at the merge gate
@@ -524,14 +524,21 @@ class DashboardMonitorTests(TmpHome):
     def attention(self, tid):
         return {r["task_id"]: r["attention"] for r in dd.overview()["tasks"]}[tid]
 
-    def test_a_silent_active_task_is_flagged_as_stuck(self):
+    def test_an_active_task_nothing_runs_is_flagged_at_once(self):
+        """Master prompt, phase A: "running" is what a live heartbeat says, not a guess after 30 quiet minutes - a
+        20-minute agent call is quiet too, and a crashed run should not look alive for half an hour."""
+        from agentsys import worker
         self.task("t-old", "build", event_age_min=dd.STUCK_MIN + 5)
         self.task("t-new", "build", event_age_min=2)
         self.task("t-done", "done", event_age_min=600)
         a = self.attention("t-old")
-        self.assertEqual(a["level"], "bad"); self.assertIn("stuck", a["text"]); self.assertIn("run-next", a["text"])
-        self.assertIsNone(self.attention("t-new")); self.assertIsNone(self.attention("t-done"))
-        self.assertTrue(any(i["task_id"] == "t-old" and "stuck" in i["text"] for i in dd.alerts_view()["items"]))
+        self.assertEqual(a["level"], "bad"); self.assertIn("not running", a["text"]); self.assertIn("Continue", a["text"])
+        self.assertIn("not running", self.attention("t-new")["text"])         # no 30-minute wait any more
+        self.assertIsNone(self.attention("t-done"))
+        with worker.Heartbeat("worker") as hb:
+            hb.set_job("task", "t-old")
+            self.assertIsNone(self.attention("t-old"))                         # a live run that is quiet is not flagged
+        self.assertTrue(any(i["task_id"] == "t-old" and "not running" in i["text"] for i in dd.alerts_view()["items"]))
 
     def test_the_reason_a_task_stopped_is_shown(self):
         self.task("t-b", "blocked", event_age_min=1, queue={"status": "blocked", "note": "delivery failed: target repo is dirty"})
@@ -539,9 +546,9 @@ class DashboardMonitorTests(TmpHome):
         self.task("t-p", "paused", event_age_min=1, queue={"status": "paused", "note": "usage limit", "resume_after": time.time() + 3600})
         self.task("t-a", "review", event_age_min=1, waiting=True)
         self.assertIn("target repo is dirty", self.attention("t-b")["text"])
-        self.assertEqual(self.attention("t-q"), {"level": "warn", "text": "needs_input: Which database?"})
+        self.assertEqual(self.attention("t-q"), {"level": "warn", "text": "a question for you - answer it in the Task monitor: Which database?"})
         self.assertIn("paused until about", self.attention("t-p")["text"])
-        self.assertEqual(self.attention("t-a")["text"], "waiting for your approval")
+        self.assertEqual(self.attention("t-a")["text"], "waiting for your approval (Approvals tab)")
         d = self.task("t-t", "blocked", event_age_min=1)
         (d / "workspace_tainted.json").write_text(json.dumps({"role": "security", "head": "a" * 40}))
         self.assertIn("could NOT be reverted", self.attention("t-t")["text"])
@@ -594,6 +601,8 @@ class DashboardActionTests(TmpHome):
         self.assertEqual(actions.handle_post("/api/approval/decide", {"id": "missing-1", "decision": "approved"}, self.H)[0], 400)
         self.assertEqual(actions.handle_post("/api/control", {"task_id": "../x", "action": "stop"}, self.H)[0], 400)
         self.assertEqual(actions.handle_post("/api/control", {"task_id": "t1", "action": "format"}, self.H)[0], 400)
+        self.assertEqual(actions.handle_post("/api/control", {"task_id": "t1", "action": "pause"}, self.H)[0], 404)  # no such task
+        orchestrator.submit("t1", requirements=REQ)
         self.assertEqual(actions.handle_post("/api/control", {"task_id": "t1", "action": "pause"}, self.H)[0], 200)
         self.assertEqual(control.read("t1"), "pause")
         self.assertEqual(actions.handle_post("/api/nothing", {}, self.H)[0], 404)

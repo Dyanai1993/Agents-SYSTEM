@@ -39,17 +39,28 @@ No need to install `make`: every target is one plain Python command.
 
 See `docs/architecture.md`.
 
-## Start here: the Requirements Assistant
-Write what you want in your own words (Hebrew or English); the assistant asks what it needs, keeps an editable draft,
-and nothing is queued until you approve a revision. Run these on your own computer, each in its own terminal:
+## Start here: one command
 ```bash
-python dashboard/server.py 8765      # then open http://127.0.0.1:8765 -> "New task"
-python scripts/orch.py assistant     # answers your messages: one Haiku call per message, nothing while idle
-python scripts/orch.py run-next      # once you approved and submitted a draft: builds it until it needs you
+python scripts/up.py                 # the dashboard AND the worker, in one terminal (Ctrl+C stops both)
 ```
-- The dashboard never calls a model: a message is saved as a turn request, and `orch.py assistant` (or `run-next`)
-  answers it. Refreshing the page costs nothing. A failed turn (bad output, usage limit) keeps your draft and waits
-  for you to press Retry - it is never retried on its own.
+Open http://127.0.0.1:8765. The header line says whether the worker is alive and what it is doing (idle; answering
+your message; running T-0025 with the developer for 12 min), or that it is offline, crashed, or runs old code.
+1. **New task**: write what you want in your own words (Hebrew or English); the assistant asks what it needs and keeps
+   an editable draft. Nothing is queued until you approve a revision.
+2. **Task monitor**: press **Start**. The worker plans, builds and tests it until it needs you. While it runs you see
+   the current agent and how long it has been working; the heartbeat proves it is alive (a long agent call is quiet).
+3. When it needs you, the Task monitor says what and offers the one next action: answer its question right there,
+   decide an approval (Approvals tab), **Continue** after an approval, **Retry** after a block, **Resume** after a stop.
+4. After you approve the merge, press **Continue**: the patch files go to `deliveries/<task>/`.
+
+- The worker is the only process that calls a model: it answers chat messages and runs the tasks you Start/Continue,
+  never anything else, and makes no call while nothing waits. Only one worker can run. After updating the code,
+  restart `up.py` (the header tells you when a process runs old code).
+- The dashboard never calls a model: every button writes a request file. Refreshing the page costs nothing. A failed
+  chat turn keeps your draft and waits for Retry - it is never retried on its own.
+- Pause and Stop act at once when nothing is running, otherwise before the next agent call. Stop is undone by Resume.
+- Still there for terminals: `python scripts/orch.py worker` (the worker alone; `assistant` is the old name) and
+  `python scripts/orch.py run-next` (one run, it shows in the header too).
 - Ctrl+Enter sends (Enter adds a line). You can type your next message while the assistant answers, and the page keeps
   refreshing without losing what you typed. Click a proposal to quote it into your reply.
 - Edit the draft by hand any time; a late assistant reply never overwrites a newer edit (revision numbers).

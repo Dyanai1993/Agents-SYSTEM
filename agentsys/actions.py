@@ -52,7 +52,12 @@ def handle_post(path, body, headers):
         if path == "/api/control":
             if body.get("action") not in ("pause", "stop", "resume"):
                 return 400, {"error": "action must be pause, stop or resume"}
-            return 200, control.set_control(str(body.get("task_id", "")), body["action"])
+            try:
+                return 200, orchestrator.apply_control(str(body.get("task_id", "")), body["action"])
+            except KeyError as e:
+                return 404, {"error": str(e).strip("'\"")}
+        if path in ("/api/task/run", "/api/task/answer"):
+            return _task_action(path, body)
         if path == "/api/task/delete":
             try:
                 return 200, orchestrator.delete_task(str(body.get("task_id", "")))
@@ -67,6 +72,36 @@ def handle_post(path, body, headers):
     except (approvals.ApprovalError, ValueError, schema.SchemaError) as e:
         return 400, {"error": str(e)[:200]}
     return 404, {"error": "not found"}
+
+
+ANSWER_MAX = 300      # orchestrator.retry keeps at most this much of an answer: refuse longer, never cut silently
+
+
+def _task_action(path, body):
+    """Start / Continue / Retry and Answer: files only. The worker does the run; the dashboard never calls a model."""
+    from . import worker
+    tid = str(body.get("task_id", ""))
+    try:
+        if path == "/api/task/run":
+            act = body.get("action", "start")
+            if act not in ("start", "continue", "retry"):
+                return 400, {"error": "action must be start, continue or retry"}
+            if act == "retry":                                 # blocked / needs_approval -> queued, from the checkpoint
+                orchestrator.retry(tid)
+            return 200, {"request": worker.request_run(tid, act)}
+        answer = " ".join(str(body.get("answer", "")).split())
+        if not answer:
+            return 400, {"error": "write your answer first"}
+        if len(answer) > ANSWER_MAX:
+            return 400, {"error": f"answers are limited to {ANSWER_MAX} characters (yours has {len(answer)}): shorten it"}
+        e = orchestrator.retry(tid, answer)
+        if e["status"] != "queued":            # before the requirement is approved, the answer changes the DRAFT
+            return 200, {"status": e["status"], "note": e["note"]}
+        return 200, {"status": e["status"], "note": e["note"], "request": worker.request_run(tid, "continue")}
+    except orchestrator.TaskBusy as e:
+        return 409, {"error": f"{e}: try again when the current run ends"}
+    except KeyError as e:
+        return 404, {"error": str(e).strip("'\"")}
 
 
 def _assistant(path, body):

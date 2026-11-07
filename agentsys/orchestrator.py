@@ -11,6 +11,7 @@ in a target repo. It never merges into main and never pushes.
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from . import approvals, config, control, intake, logger, loop, memory, runner, schema, tasks
@@ -83,7 +84,7 @@ JUNK = [":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/*.pyc", ":(exclud
         ":(exclude,glob)**/.mypy_cache/**", ":(exclude,glob)**/.ruff_cache/**", ":(exclude,glob)**/node_modules/**",
         ":(exclude,glob)**/.venv/**", ":(exclude,glob)**/.DS_Store"]
 
-RETRYABLE = {"needs_input", "needs_approval", "blocked", "paused", "queued"}
+RETRYABLE = {"needs_input", "needs_approval", "blocked", "paused", "queued", "stopped"}   # stop is reversible: resume = retry
 
 
 def retry(task_id, answer=None):
@@ -348,6 +349,42 @@ def next_task_id():
     nums = [int(m.group(1)) for d in (_qdir(), h / "tasks", h / "trash", h / "deliveries") if d.is_dir()
             for p in d.iterdir() if (m := _re.fullmatch(r"T-(\d{4})(\.json|-.+)?", p.name))]
     return f"T-{max(nums, default=0) + 1:04d}"
+
+
+def apply_control(task_id, action):
+    """Pause / stop / resume, as the user means it. control.json is always written (the loop reads it before every
+    agent call). When no run holds the task, the status changes NOW - seen live: a stopped task still said 'queued'
+    until the next run. While a run holds it, the request is pending and takes effect before the next agent call.
+    Stop is reversible: resume puts a stopped task back in the queue, continuing from its checkpoint."""
+    if action not in ("pause", "stop", "resume"):
+        raise ValueError("action must be pause, stop or resume")
+    task_id = logger.safe_task_id(task_id)
+    if load_entry(task_id) is None:
+        raise KeyError(f"no task {task_id}")
+    control.set_control(task_id, action)
+    try:
+        with _Lock(task_id):
+            e = load_entry(task_id)
+            st, new = e["status"], None
+            if action == "stop" and st not in ("done", "rejected", "stopped"):
+                new = dict(status="stopped", note="stopped by you: Resume continues from the last checkpoint", resume_after=None)
+            elif action == "pause" and st == "queued":
+                new = dict(status="paused", note="paused by you: Resume to continue", resume_after=None)
+            elif action == "resume" and (st == "stopped" or (st == "paused" and (e.get("resume_after") or 0) <= time.time())):
+                new = dict(status="queued", note="resumed by you: continues from the last checkpoint", resume_after=None)
+            if new:
+                e.update(new)
+                save_entry(e)
+                logger.log_event(task_id, "human", "decision", f"{action}: status is now {new['status']}", status="ok")
+            from . import worker                       # a stopped/paused task must not start from an older request,
+            req = worker.get_request(task_id)          # and after Resume an old refusal ("it is paused") is stale
+            if action in ("stop", "pause") or (req and req.get("status") == "refused"):
+                worker.cancel_run(task_id)
+            return {"task_id": task_id, "action": action, "applied": True, "status": e["status"],
+                    "note": e.get("note", "")}
+    except TaskBusy:
+        return {"task_id": task_id, "action": action, "applied": False, "status": load_entry(task_id)["status"],
+                "note": f"{action} requested: a run is working on this task, it takes effect before its next agent call"}
 
 
 def delete_task(task_id):

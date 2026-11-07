@@ -61,35 +61,65 @@ def _epoch(ts):
         return None
 
 
-def _attention(task_id, d, st, idle_min):
-    """What needs a human for this task, as (level, text), or None. Read-only: files only, no lock probing."""
+def _live_tasks():
+    """Task ids a LIVE process (worker or run-next, fresh heartbeat) is working on right now."""
+    from . import worker
+    try:
+        return {p["job"]["id"] for p in worker.status()["processes"]
+                if p["alive"] and p.get("job") and p["job"].get("kind") == "task"}
+    except Exception:          # the dashboard must never crash on bad data
+        return set()
+
+
+def _attention(task_id, d, st, idle_min, live=None):
+    """What needs a human for this task, as (level, text), or None. Read-only: files only, no lock probing.
+    `live`: task ids a process with a fresh heartbeat works on - the truth about "running", instead of guessing
+    "stuck?" after 30 quiet minutes (a 20-minute agent call is quiet too)."""
+    from . import worker
+    live = _live_tasks() if live is None else live
     entry = _json(config.home() / "queue" / f"{task_id}.json") or {}
     state, status, note = st.get("state"), entry.get("status"), (entry.get("note") or "")[:300]
     if (d / "workspace_tainted.json").exists():
         return "bad", "an agent's changes could NOT be reverted: restore the workspace before anything else runs (see the task's alert)"
+    ctl = _json(d / "control.json") or {}
+    if task_id in live:                                # running: only a pending pause/stop needs saying
+        if ctl.get("action") in ("pause", "stop"):
+            return "warn", f"{ctl['action']} requested: it takes effect before the next agent call"
+        return None
+    req = worker.get_request(task_id) if logger.TASK_ID_RE.match(task_id) else None
+    if req and req.get("status") == "refused":
+        return "bad", f"your {req.get('action', 'start')} request was refused: {req.get('note')}"
+    if req and req.get("status") in ("waiting", "running"):
+        return "warn", f"{req.get('action', 'start')} requested: waiting for the worker" + (f" ({req['note']})" if req.get("note") else "")
     req_phase = entry.get("requirements") is None and bool(entry.get("request_text"))
     if status == "waiting_approval":
         from . import approvals
         decided = approvals.latest(task_id, "requirements" if req_phase else "merge")[1]
-        if decided == "approved":                  # decided, but nothing runs until the next run-next picks it up
-            return "warn", ("requirement approved" if req_phase else "merge approved") + ": continue with `python scripts/orch.py run-next`"
+        if decided == "approved":                  # decided, but nothing runs until the user presses Continue
+            return "warn", ("requirement approved: press Continue to plan and build it" if req_phase
+                            else "merge approved: press Continue to deliver the patch files")
     if req_phase and status == "waiting_approval":
         return "warn", "review the requirement draft: approve or reject it" + (
             " - it has a BLOCKING question" if "blocking question" in note else "")
     if status == "queued":
-        return "warn", "queued: start it with `python scripts/orch.py run-next`"
-    if st.get("waiting_approval"):
-        return "warn", "waiting for your approval"
-    if status in ("needs_input", "needs_approval"):
-        return "warn", f"{status}: {note}" if note else status
-    if state in ("blocked", "failed"):
-        return "bad", note or "blocked: see status_report.md in the task folder"
-    if state == "paused":
+        started = state not in (None, "intake") or (d / "progress.json").exists()
+        return "warn", ("not running: press Continue to resume from its last checkpoint" if started else "queued: press Start")
+    if status == "stopped":
+        return "warn", "stopped: press Resume to continue from the last checkpoint"
+    if st.get("waiting_approval") or status == "waiting_approval":
+        return "warn", "waiting for your approval (Approvals tab)"
+    if status == "needs_input":
+        return "warn", "a question for you - answer it in the Task monitor" + (f": {note}" if note else "")
+    if status == "needs_approval":
+        return "warn", f"needs your approval: {note}" if note else "needs your approval (Approvals tab)"
+    if state in ("blocked", "failed") or status == "blocked":
+        return "bad", (note or "blocked: see status_report.md in the task folder") + " - fix the cause, then press Retry"
+    if state == "paused" or status == "paused":
         when = entry.get("resume_after")
         return "warn", "paused" + (f" until about {_hhmm(when)}" if when else "") + (f": {note}" if note else "")
-    if state in ACTIVE_STATES and idle_min is not None and idle_min > STUCK_MIN:
-        return "bad", (f"stuck? no activity for {int(idle_min)} min in '{state}' - the run probably stopped. "
-                       f"`python scripts/orch.py run-next` resumes it from its checkpoint")
+    if state in ACTIVE_STATES and status not in ("done", "rejected"):
+        quiet = f" (last activity {int(idle_min)} min ago)" if idle_min is not None else ""
+        return "bad", f"not running: no worker or run-next is working on it{quiet}. Press Continue to resume from its checkpoint"
     return None
 
 
@@ -112,6 +142,7 @@ def overview(now=None):
     events, bad = all_events()
     last = _last_events(events)
     rows = []
+    live = _live_tasks()
     if tasks_dir.is_dir():
         for d in sorted(tasks_dir.iterdir()):
             # a task has a state.json; an assistant session (D-####) or a smoke run only keeps a budget/log there
@@ -120,9 +151,11 @@ def overview(now=None):
             st, bud = _json(d / "state.json") or {}, _json(d / "budget.json") or {}
             t = _epoch(last.get(d.name) or st.get("updated_at"))
             idle = None if t is None else max(0.0, (now - t) / 60)
-            att = _attention(d.name, d, st, idle)
+            att = _attention(d.name, d, st, idle, live)
+            entry = _json(config.home() / "queue" / f"{d.name}.json") or {}
             rows.append({
                 "task_id": d.name, "title": st.get("title", d.name), "state": st.get("state", "unknown"),
+                "status": entry.get("status"), "running": d.name in live,
                 "current_agent": st.get("current_agent"), "waiting_approval": st.get("waiting_approval", False),
                 "updated_at": st.get("updated_at"), "created_at": st.get("created_at"),
                 "calls": bud.get("calls", 0), "call_cap": bud.get("call_cap"),
@@ -222,7 +255,8 @@ def task_detail(task_id, now=None):
     st, bud, prog, plan = _json(d / "state.json") or {}, _json(d / "budget.json") or {}, _json(d / "progress.json") or {}, _json(d / "plan.json")
     t = _epoch(events[-1]["ts"] if events else st.get("updated_at"))
     idle = None if t is None else max(0.0, ((time.time() if now is None else now) - t) / 60)
-    att = _attention(task_id, d, st, idle)
+    live = _live_tasks()
+    att = _attention(task_id, d, st, idle, live)
     return {"task_id": task_id, "state": st, "budget": bud, "progress": prog, "plan": plan,
             "events": events, "bad_lines": bad, "states": MAIN_STATES,
             "has_status_report": (d / "status_report.md").exists(),
@@ -230,7 +264,24 @@ def task_detail(task_id, now=None):
             "security": _json(d / "security_report.json"), "tainted": _json(d / "workspace_tainted.json"),
             "idle_min": None if idle is None else round(idle, 1),
             "attention": None if att is None else {"level": att[0], "text": att[1]},
-            "requirement": requirement_view(task_id)}
+            "requirement": requirement_view(task_id), "run": run_view(task_id, live)}
+
+
+def run_view(task_id, live=None):
+    """What the Task monitor needs for its buttons: the queue status, whether a live process runs it, the user's
+    Start/Continue request, a pending control, and why it cannot run now (scheduler.run_blocker)."""
+    from . import orchestrator, scheduler, worker
+    entry = orchestrator.load_entry(task_id)
+    if entry is None:
+        return None
+    live = _live_tasks() if live is None else live
+    why, hard = scheduler.run_blocker(entry)
+    ctl = _json(config.home() / "tasks" / task_id / "control.json") or {}
+    applied = {"stop": "stopped", "pause": "paused"}.get(ctl.get("action"))
+    return {"status": entry["status"], "note": entry.get("note", ""), "running": task_id in live,
+            "request": worker.get_request(task_id), "blocker": why, "blocker_needs_you": hard,
+            "control": ctl.get("action"), "control_pending": bool(applied) and entry["status"] != applied and task_id in live,
+            "started": (config.home() / "tasks" / task_id / "progress.json").exists()}
 
 
 def requirement_view(task_id):
