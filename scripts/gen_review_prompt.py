@@ -1,8 +1,10 @@
 """Build the self-review prompt for a finished phase, to hand to an independent reviewer.
 
   python scripts/gen_review_prompt.py 3        reads docs/reviews/phase3.json, writes docs/reviews/phase3-review-prompt.md
+  python scripts/gen_review_prompt.py system   reads docs/reviews/system.json, writes docs/reviews/system-review-prompt.md
 
-The reviewer reviews ONLY. It must not change files. All changes are made by the builder (Claude Code).
+A named (non-phase) review may set "heading", "claims_heading", "method", "dimensions" and "output" to replace the
+phase defaults. The reviewer reviews ONLY. It must not change files. All changes are made by the builder (Claude Code).
 """
 import json, subprocess, sys
 from pathlib import Path
@@ -10,7 +12,8 @@ from pathlib import Path
 REPO_URL = "https://github.com/Dyanai1993/Agents-SYSTEM"
 root = Path(__file__).resolve().parent.parent
 n = sys.argv[1]
-spec = json.loads((root / "docs" / "reviews" / f"phase{n}.json").read_text(encoding="utf-8"))
+stem = f"phase{n}" if n.isdigit() else n
+spec = json.loads((root / "docs" / "reviews" / f"{stem}.json").read_text(encoding="utf-8"))
 
 def git(*a):
     r = subprocess.run(["git", *a], cwd=root, capture_output=True, text=True)
@@ -36,7 +39,27 @@ for f in spec["files"]:
     p = root / f
     files.append(f"[{f}]({REPO_URL}/blob/{branch}/{f})  ({len(p.read_text(encoding='utf-8').splitlines())} lines)" if p.is_file() else f"{f}  (MISSING)")
 
-out = f"""# Review request: Phase {n} — {spec['title']}
+DIMENSIONS = [
+    "Correctness: logic errors, wrong state transitions, races, resume/crash behaviour.",
+    "Billing and quota safety: any path that could call a paid API, loop on calls, or skip the guard or the caps.",
+    "Security: file-path handling, injection, the dashboard write actions, secrets in logs or files, prompt-injection paths.",
+    "Enforcement gap: rules in prompts or docs that no code or test enforces.",
+    "Test quality: tests that pass for the wrong reason, missing failure cases, tests that mirror the implementation.",
+    "Maintainability and honesty of docs: do README and docs say what the code does? Anything claimed but not built?",
+]
+OUTPUT = [
+    "**Verdict**: one of `ship`, `ship after fixes`, `do not ship`, with one sentence.",
+    "**Findings table**: columns `#`, `severity (blocker/high/medium/low)`, `file:line`, `what is wrong`, `how to reproduce or verify`, `suggested fix (one line)`.",
+    "**Claims check**: for each claim above: `verified`, `not verified`, or `false`, with evidence.",
+    "**Missing tests**: bullet list of concrete test cases.",
+    "**Things you did NOT review** and why.",
+]
+dims = spec.get("dimensions", DIMENSIONS)
+dim_text = "\n".join(f"{i}. {d}" for i, d in enumerate(dims, 1)) + f"\n{len(dims) + 1}. Specific questions for this {'phase' if n.isdigit() else 'review'}:"
+out_text = "\n".join(f"{i}. {o}" for i, o in enumerate(spec.get("output", OUTPUT), 1))
+method = f"\n## How to review\n{listing(spec['method'])}\n" if spec.get("method") else ""
+
+out = f"""# Review request: {spec.get('heading', f'Phase {n}')} — {spec['title']}
 
 ## Where the code is
 {chr(10).join(links)}
@@ -57,7 +80,7 @@ If you cannot verify something, say "not verified" and why. Do not guess.
 - Agent output is validated by schemas AND code rules. A prompt rule that code does not enforce is a risk: report it.
 - Personal use only.
 
-## What this phase claims to deliver
+## {spec.get('claims_heading', 'What this phase claims to deliver')}
 {listing(spec['claims'])}
 
 ## Files to read (start here)
@@ -68,25 +91,15 @@ If you cannot verify something, say "not verified" and why. Do not guess.
 
 ## How to verify without spending quota
 {listing('`' + c + '`' for c in spec['verify'])}
-
+{method}
 ## Review dimensions
-1. Correctness: logic errors, wrong state transitions, races, resume/crash behaviour.
-2. Billing and quota safety: any path that could call a paid API, loop on calls, or skip the guard or the caps.
-3. Security: file-path handling, injection, the dashboard write actions, secrets in logs or files, prompt-injection paths.
-4. Enforcement gap: rules in prompts or docs that no code or test enforces.
-5. Test quality: tests that pass for the wrong reason, missing failure cases, tests that mirror the implementation.
-6. Maintainability and honesty of docs: do README and docs say what the code does? Anything claimed but not built?
-7. Specific questions for this phase:
+{dim_text}
 {listing(spec['questions'])}
 
 ## Output format (use exactly this)
-1. **Verdict**: one of `ship`, `ship after fixes`, `do not ship`, with one sentence.
-2. **Findings table**: columns `#`, `severity (blocker/high/medium/low)`, `file:line`, `what is wrong`, `how to reproduce or verify`, `suggested fix (one line)`.
-3. **Claims check**: for each claim above: `verified`, `not verified`, or `false`, with evidence.
-4. **Missing tests**: bullet list of concrete test cases.
-5. **Things you did NOT review** and why.
+{out_text}
 Keep it short. No praise. Rank by risk.
 """
-dest = root / "docs" / "reviews" / f"phase{n}-review-prompt.md"
+dest = root / "docs" / "reviews" / f"{stem}-review-prompt.md"
 dest.write_text(out, encoding="utf-8")
 print("written", dest.relative_to(root), len(out.splitlines()), "lines")

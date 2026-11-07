@@ -1,0 +1,110 @@
+# Review request: Whole system — UI, UX, front-end/back-end connection, how agents run as the user experiences it, and task-state visibility
+
+## Where the code is
+- Repository: https://github.com/Dyanai1993/Agents-SYSTEM
+- Branch to review: https://github.com/Dyanai1993/Agents-SYSTEM/tree/claude/fix-timeout-and-retry
+- Compare with main: https://github.com/Dyanai1993/Agents-SYSTEM/compare/main...claude/fix-timeout-and-retry
+Review the branch above, not main. Files are listed relative to the repository root; each one opens at `https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/<path>`.
+
+## Your role
+You are an independent REVIEWER. Review only. Do NOT edit, create, delete or commit any file. Do NOT run anything that spends
+model quota or touches the network, and never use an API key. The builder (Claude Code) makes every change after reading your report.
+If you cannot verify something, say "not verified" and why. Do not guess.
+
+## System in one paragraph
+A personal multi-agent engineering system on Claude Code with a Max subscription login. The user describes what they want in a local dashboard (the Requirements Assistant, a Haiku chat that keeps an editable requirement draft); an approved draft becomes a task; `orch.py run-next` runs the task through a Python state machine, one agent at a time (Architect plan, Developer build, Tester test, fix loops, final regression, read-only Security review), up to a merge approval and a delivery of patch files. The dashboard (dashboard/index.html + dashboard/server.py) only reads files and writes request files; it never calls a model. Model calls happen in separate processes the user starts in terminals: `orch.py assistant` (answers chat messages) and `orch.py run-next` (runs tasks). THIS REVIEW IS NOT SCOPED TO A COMMIT: review the whole system at the branch tip, from the user's point of view. Earlier reviews were scoped to one phase each and looked mostly at correctness and safety of the engine; this one looks at how a person actually uses it. Ground truth from the first real use: messages waited because no worker was running, two workers raced (one with stale code) and failed turns, a task was submitted twice from two drafts, the user could not tell what a running task was doing, the task picker closed every 2.5 s, and there was no way to delete a task. Some of these are fixed; find what is still wrong and what was never designed.
+
+## Hard constraints of the whole system (check every change against them)
+- Billing: Claude Max subscription login only. No API key, no pay-per-token, no extra usage. The billing guard must stay fail-closed.
+- Usage is the scarce resource: sequential agents, small contexts, hard loop limits, no tight retry loops.
+- Least privilege and human approval for irreversible actions. The dashboard never calls an LLM.
+- Agent output is validated by schemas AND code rules. A prompt rule that code does not enforce is a risk: report it.
+- Personal use only.
+
+## What the system claims today (check each against the code)
+- The dashboard never calls a model: a chat message, a retry, an approval, a pause/stop/resume or a delete only writes a file; refreshing costs zero calls
+- Every dashboard POST needs the X-Agentsys header, a JSON body and a localhost Host and Origin; responses forbid framing (X-Frame-Options DENY, frame-ancestors 'none')
+- Requirements Assistant: a message is one turn request; `orch.py assistant` (or `run-next`, first) answers it; a failed turn waits for an explicit Retry; a late reply never overwrites a newer hand edit (revision numbers); Approve and submit is idempotent and queues exactly the reviewed revision
+- The chat keeps refreshing while you type (it skips re-rendering when nothing changed and restores focus, cursor and scroll when it does); a waiting turn shows an elapsed timer and, after 20 s, asks whether the worker is running
+- Before submitting, the page warns in red when the last message failed or is not answered yet (it is not in the draft); submitting stays the user's decision
+- `run-next` runs one task as far as it can go without the human (plan, build/test/fix per work item, final regression, security, merge gate) and returns only when it needs the human or cannot continue; the terminal prints one JSON result at the end
+- One agent call at a time across all processes (queue/_exec.lock); a second run-next or worker is skipped, not run in parallel
+- The dashboard shows what needs the human per task (scheduler/dashboard_data._attention): queued (start with run-next), requirement or merge approved (continue with run-next), waiting for approval, needs_input, blocked, paused (with a time), tainted workspace, and 'stuck?' after 30 min without activity in an active state
+- state.json records the current state and current_agent before each agent call (plan/architect, build or fix/developer, test/tester, security/security, review waiting for approval)
+- Pause / Stop / Resume write a control file that the loop reads before every agent call
+- Delete moves a task to trash/ (queue entry, task folder with its workspace, its approval files): recoverable, refused while a run holds the task lock; deliveries and the usage history are kept; a deleted id is never reused
+- Usage: a 5-hour / 7-day window estimate from state/window.json (an estimate, not official)
+- README explains how to start everything (three terminals: dashboard, assistant worker, run-next) and what each status means
+
+## Files to read (start here)
+- [dashboard/index.html](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/dashboard/index.html)  (414 lines)
+- [dashboard/server.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/dashboard/server.py)  (93 lines)
+- [agentsys/dashboard_data.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/dashboard_data.py)  (380 lines)
+- [agentsys/actions.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/actions.py)  (124 lines)
+- [agentsys/assistant.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/assistant.py)  (330 lines)
+- [agentsys/scheduler.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/scheduler.py)  (81 lines)
+- [agentsys/orchestrator.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/orchestrator.py)  (470 lines)
+- [agentsys/loop.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/loop.py)  (632 lines)
+- [agentsys/tasks.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/tasks.py)  (30 lines)
+- [agentsys/control.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/control.py)  (27 lines)
+- [agentsys/approvals.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/approvals.py)  (148 lines)
+- [agentsys/runner.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/runner.py)  (538 lines)
+- [agentsys/ledger.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/agentsys/ledger.py)  (130 lines)
+- [scripts/orch.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/scripts/orch.py)  (113 lines)
+- [.claude/agents/assistant.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/.claude/agents/assistant.md)  (44 lines)
+- [README.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/README.md)  (91 lines)
+- [docs/architecture.md](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/docs/architecture.md)  (112 lines)
+- [tests/test_assistant.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_assistant.py)  (199 lines)
+- [tests/test_phase3.py](https://github.com/Dyanai1993/Agents-SYSTEM/blob/claude/fix-timeout-and-retry/tests/test_phase3.py)  (804 lines)
+
+## Weak points the builder already suspects (confirm, refute, or rank them)
+- Three processes are needed (dashboard server, assistant worker, run-next) and nothing tells the user whether the worker or a run is alive. A chat message or a queued task just waits. Seen live: no worker running; then two workers at once, one with stale code, racing for turns
+- Nothing starts or continues a task from the dashboard: it shows the text 'start it with python scripts/orch.py run-next'. This follows from 'the dashboard never calls a model', but a request file picked up by a worker (as chat turns already are) would not break that rule
+- run-next blocks for the whole task (possibly tens of minutes; a Developer call may take up to 20 min) and prints nothing until it stops. During a long agent call there is no heartbeat: 'last activity N min ago' grows until the 30-min 'stuck?' warning, so 'working' and 'crashed' look the same for half an hour
+- Stop and pause act only before the NEXT agent call, and the queue status does not change until then (seen: T-0024 still 'queued' after a stop request). The UI says this in small grey text only
+- A code update needs process restarts (the server for new endpoints, the worker for runner fixes). Nothing detects a stale process; a new endpoint on an old server answers 404 'not found'
+- The same task status lives in several files (queue entry status, state.json state, progress.json, approvals) and the views read different ones (e.g. a queued task shows state 'intake'). Contradictions are possible
+- Nothing reaches the user outside the open dashboard page: no notification when a task needs them, finishes or fails
+- UI: one 400-line HTML file, full re-render every 2.5 s, browser-default buttons, mixed confirmation styles (native confirm/alert in some places, inline in others); the header navigation wraps to three rows on a narrow window and the sticky header then takes much of the screen
+- Errors are often raw strings (e.g. CLI stderr inside the failed-turn bubble; server error text in flash notes)
+- Two ways to create a task with different paths: the dashboard assistant (structured, no requirement gate) and `orch.py submit --request` (intake + requirement gate). Nothing warns that a similar task is already queued (two FirstWords tasks were queued)
+- The final steps (final regression, security report, merge approval, delivery of patch files to deliveries/<task>/) are visible only as states and approval text; the user must run run-next again after approving a merge, and the delivered path is shown only in the queue note
+- Live verification is thin: only small CLI tasks ran end to end; a large task never did. The UI was checked by the builder in a browser with a scripted fake model only
+
+## How to verify without spending quota
+- `python -m unittest discover -s tests -t . -v`
+- `python evals/run_evals.py selfcheck`
+
+## How to review
+- If you can run code: use an EMPTY data folder so nothing touches real data (PowerShell: `$env:AGENTSYS_HOME = "$env:TEMP\agentsys-review"`; bash: `export AGENTSYS_HOME=$(mktemp -d)`), then `python scripts/seed_demo.py` (fake backend, zero quota) and `python dashboard/server.py 8765`, and use http://127.0.0.1:8765 in a browser at a normal and a narrow (phone) width, light and dark
+- If the billing guard stops the demo because a provider variable (e.g. ANTHROPIC_BASE_URL) is set in your shell, that is the guard working as designed: use a shell without it. Do not weaken the guard
+- Never start `orch.py assistant`, `orch.py run-next` or anything else that calls the real model or touches the network. To see the chat answer, a test in tests/test_assistant.py shows how to drive assistant.process_next_turn with a FakeBackend
+- Walk these journeys as a first-time user who has only the README: (1) idea -> chat -> draft -> approve and submit; (2) start the task and follow it while it runs; (3) the task asks a question (needs_input) or blocks; (4) final regression, security report, merge approval, delivery; (5) pause / stop / resume / delete; (6) a process is not running, crashed, or runs old code
+- If you cannot run code: review from the code and say 'not verified in a browser' for each UI point
+
+## Review dimensions
+1. UX and journeys: at every step, does the user know what is happening, what comes next, and what they must do? Where would a first-time user be stuck or do the wrong thing?
+2. Task-state visibility and feedback: can the user tell working from stuck from crashed, see the current agent, step, elapsed time and last result, and find out that a task needs them?
+3. Front-end / back-end connection: is every action's success and failure shown? Can views be stale or contradict each other? What happens when the server, the worker or run-next is down, crashed, duplicated or running old code?
+4. Agent runtime as the user experiences it: long calls, the one-call-at-a-time lock, usage limits and pauses, stop/pause latency, retries, the three-process model
+5. UI quality: layout, consistency, accessibility (keyboard, contrast, screen reader labels), narrow screens, light and dark themes, feedback on actions
+6. Safety of the dashboard write paths and the new delete action (correctness, races, path handling); the hard constraints above still hold
+7. Honesty of README and docs: does what they say match what the user sees?
+8. Specific questions for this review:
+- Walk journey (2): a task is running and the current agent call takes 15 minutes. Exactly what does the user see in the dashboard and the terminal during those minutes? Is it enough? What is the smallest change that gives a trustworthy 'alive' signal (a heartbeat from the running process, a running-process marker with its pid, ...)?
+- Propose the smallest design that gives ONE entry point instead of three terminals without breaking 'the dashboard never calls a model' (e.g. one worker process that answers chat turns AND runs tasks the user started from the dashboard through a request file). What would break or get riskier?
+- List every place the same status is stored (queue entry, state.json, progress.json, approvals, control.json, the draft session) and every view that reads it. Where can two views disagree, and which one should be the single source?
+- For each dashboard action (send, retry, save draft, submit, approve/reject, pause/stop/resume, delete): what does the user see on success, on a server error, on a network error, on a stale page? Any silent failure?
+- The last steps: after the security review and the merge approval, does the user understand what was checked, see the report and the diff, know they must run run-next again, and find the delivered patch files? What is missing?
+- Rank the top UI problems by user impact, with a concrete fix each. Is a full re-render every 2.5 s still acceptable, or should it be replaced (e.g. only re-render on change, or server-sent events)?
+- Notifications: what is the smallest way to tell the user that a task needs them, finished or failed, without them watching the page, within the constraints (local, personal, no model calls)?
+- Is anything in README or the dashboard text wrong today (commands, statuses, what happens after an action)?
+
+## Output format (use exactly this)
+1. **Verdict**: one of `usable`, `usable after fixes`, `not usable yet`, with one sentence.
+2. **Journey table**: for each journey you walked: `step`, `what the user sees`, `what is missing or wrong`, `severity (blocker/high/medium/low)`.
+3. **Findings table**: columns `#`, `severity`, `area (UX / visibility / connection / runtime / UI / safety / docs)`, `file:line`, `what is wrong`, `how to reproduce or verify`, `suggested fix (one line)`.
+4. **Claims check**: for each claim above: `verified`, `not verified`, or `false`, with evidence.
+5. **Top 5 changes by user impact**, smallest first when impact is similar.
+6. **Things you did NOT review** and why.
+Keep it short. No praise. Rank by risk.
