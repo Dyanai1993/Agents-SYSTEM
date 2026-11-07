@@ -25,6 +25,9 @@ details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4
 .wbar.ok i{background:var(--ok)}.wbar.warn i{background:var(--warn)}.wbar.bad i{background:var(--bad)}.wbar.bad span{color:var(--bad)}
 button.primary{background:var(--acc);color:var(--onacc);border:1px solid var(--acc);border-radius:8px;padding:6px 16px;cursor:pointer;font:inherit}
 button.primary:disabled{opacity:.45;cursor:default}
+pre.diff{max-height:60vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;white-space:pre;word-break:normal}
+pre.diff .add{color:var(--ok)}pre.diff .del{color:var(--bad)}pre.diff .hunk{color:var(--acc)}pre.diff .file{font-weight:700}
+code{font-size:12px;overflow-wrap:anywhere}
 /* Requirements Assistant chat */
 .awrap{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}.awrap>.card{flex:1 1 400px;min-width:0}
 .chat{display:flex;flex-direction:column}
@@ -274,7 +277,7 @@ async function messages(){
 let curTask="",delAsk=null,taskNote=null;
 // The run card: what is happening right now and the ONE next action (Start / Continue / Resume / Retry / Answer /
 // Approvals). Every action only writes a request file; the worker does the work. The dashboard never calls a model.
-function runCard(t){
+function runCard(t,hasReview){
   const r=t.run,id=t.task_id,c=el("div",{class:"card"},el("b",{},"Run"));
   if(!r){c.append(el("div",{class:"mut"},"This task has no queue entry."));return c;}
   const now=Date.now()/1000,st=r.status,req=r.request,asked=req&&["waiting","running"].includes(req.status);
@@ -296,6 +299,7 @@ function runCard(t){
     else if(st==="stopped"||(st==="paused"&&r.blocker_needs_you))c.append(el("div",{},btn("Resume",()=>send("/api/control",{task_id:id,action:"resume"},"Resumed: press Continue to run it."),true)));
     else if(st==="blocked")c.append(el("div",{},btn("Retry",()=>send("/api/task/run",{task_id:id,action:"retry"},"Retry requested: the worker continues from the last checkpoint."),true),el("span",{class:"mut small"},"Fix the cause first (see the note above).")));
     else if(st==="needs_input")c.append(answerBox(id,r.note));
+    else if((st==="waiting_approval"||st==="needs_approval")&&hasReview&&r.blocker_needs_you)c.append(el("div",{},el("span",{class:"warn"},"The result is ready for your review: "),btn("Go to the review",()=>document.getElementById("review").scrollIntoView({behavior:"smooth"}),true)));
     else if(st==="waiting_approval"||st==="needs_approval")c.append(el("div",{},el("span",{class:"warn"},r.blocker),btn("Open Approvals",()=>go("approvals"),true)));
     else if(r.blocker)c.append(el("div",{class:r.blocker_needs_you?"mut":"warn"},r.blocker));}
   if(!["done","rejected","stopped"].includes(st)){const row=el("div",{style:"margin-top:8px"});
@@ -303,6 +307,45 @@ function runCard(t){
     row.append(btn("Stop",()=>send("/api/control",{task_id:id,action:"stop"},"Stop requested. Resume continues from the last checkpoint.")),
       el("span",{class:"mut small"},r.running?"Pause and Stop act before the next agent call; the current one finishes first.":"Pause and Stop act at once; Resume undoes them."));
     c.append(row);}
+  return c;}
+// The review screen (master prompt, phase B): criteria with their evidence, security, files and the real diff - of the
+// APPROVAL's commit, so what you see is exactly what an approval delivers. Then the decision, then the receipt.
+function diffPre(text){const pre=el("pre",{class:"diff"});text.split("\n").forEach(l=>pre.append(el("span",{class:l.startsWith("+")&&!l.startsWith("+++")?"add":l.startsWith("-")&&!l.startsWith("---")?"del":l.startsWith("@@")?"hunk":l.startsWith("diff --git")?"file":""},l+"\n")));return pre;}
+function reviewCard(v){
+  const c=el("div",{class:"card",id:"review"}),ap=v.approval,id=v.task_id,short=(v.commit||"").slice(0,10);
+  c.append(el("b",{},"Review"),el("span",{class:"mut"},"  commit "+short+(ap?" - approval "+ap.id+": "+ap.status:"")));
+  const send=async(path,body)=>{const x=await post(path,body);if(!x.ok)throw new Error(x.body.error);return x.body;};
+  if(ap&&ap.status==="pending"&&!v.stale){
+    const note=el("input",{placeholder:"Note (optional)","aria-label":"Decision note",style:"width:100%;margin-top:6px"});
+    const yes=el("button",{class:"primary",style:"margin:6px 6px 0 0"},"Approve and deliver"),no=el("button",{style:"margin:6px 6px 0 0"},"Reject");
+    const decide=async(dec,btn)=>{btn.disabled=true;try{await send("/api/approval/decide",{id:ap.id,decision:dec,note:note.value});
+        await send("/api/task/run",{task_id:id,action:"continue"});   // delivery (or the rejection) is finished by the worker: no model call
+        taskNote={cls:"ok",text:dec==="approved"?"Approved: the worker writes the patch files now.":"Rejected: nothing will be delivered."};}
+      catch(e){taskNote={cls:"bad",text:e.message};}tick();};
+    yes.onclick=()=>decide("approved",yes);no.onclick=()=>decide("rejected",no);
+    c.append(el("div",{class:"warn",style:"margin-top:6px"},"Your decision: approving delivers exactly commit "+short+" below as patch files (and a branch if a target repo was set). Nothing is merged into main."),note,yes,no);}
+  else if(ap&&ap.status==="pending"&&v.stale)c.append(el("div",{class:"warn",style:"margin-top:6px"},"The workspace, the requirement or the security report changed after this approval was requested, so it would not deliver what is shown. Press Continue in the Run card: a fresh approval for the current state is requested."));
+  if(v.delivery){const dl=v.delivery;
+    c.append(el("div",{class:"msg",style:"margin-top:8px"},el("b",{class:"ok"},"Delivered"),dl.delivered_at?el("span",{class:"mut"}," "+hhmm(dl.delivered_at)):"",
+      el("div",{},"Folder: ",el("code",{},dl.patches_dir)),dl.branch?el("div",{},"Branch: ",el("code",{},dl.branch)):"",
+      dl.commit?el("div",{class:"mut"},"Commit "+dl.commit.slice(0,10)+(dl.approval_id?" (approval "+dl.approval_id+")":"")):"",
+      list("Patch files ("+dl.patches.length+")",dl.patches),el("div",{class:"mut small"},"Apply them in your repository with: git am \""+dl.patches_dir+"\"\\*.patch")));}
+  // criteria and evidence
+  const crit=el("table",{style:"margin-top:8px"},el("tr",{},...["","Acceptance criterion","Final checks and evidence"].map(h=>el("th",{},h))));
+  v.criteria.forEach(k=>crit.append(el("tr",{},el("td",{class:k.passed?"ok":"bad"},k.passed?"pass":k.checks.length?"FAIL":"no check"),
+    el("td",{dir:"auto"},el("b",{},k.id+" "),k.text),
+    el("td",{},...k.checks.map(x=>el("div",{class:"small"},el("span",{class:x.result==="pass"?"ok":"bad"},x.result+" "),x.name,x.command?el("div",{class:"mut"},el("code",{},x.command)):"",x.evidence?el("div",{class:"mut",dir:"auto"},x.evidence):""))))));
+  c.append(crit);
+  if(v.constraints.length)c.append(list("Constraints",v.constraints.map(k=>k.id+" "+k.text+(k.checks.length?" - "+k.checks.map(x=>x.result).join(", "):""))));
+  c.append(el("div",{style:"margin-top:8px"},el("b",{},"Final regression: "),el("span",{class:v.final.verdict==="pass"?"ok":"bad"},v.final.verdict||"none"),v.final.summary?el("span",{class:"mut",dir:"auto"}," - "+v.final.summary):""));
+  const s=v.security;
+  c.append(el("div",{style:"margin-top:6px"},el("b",{},"Security review: "),s?el("span",{class:s.verdict==="pass"?"ok":"warn"},s.verdict):el("span",{class:"mut"},"no report"),
+    s&&s.summary?el("div",{class:"mut small",dir:"auto"},s.summary):""));
+  if(s&&s.findings&&s.findings.length){const ft=el("table",{},el("tr",{},...["Severity","Category","File","Description"].map(h=>el("th",{},h))));
+    s.findings.forEach(f=>ft.append(el("tr",{},el("td",{class:["high","critical"].includes(f.severity)?"bad":"warn"},f.severity),el("td",{},f.category),el("td",{},el("code",{},f.file||"")),el("td",{dir:"auto"},f.description))));c.append(ft);}
+  c.append(el("div",{style:"margin-top:8px"},el("b",{},"Changed files ("+v.files.length+")"),
+    el("ul",{style:"margin:2px 0"},...v.files.map(f=>el("li",{},el("code",{},f.path),el("span",{class:"ok"}," +"+f.added),el("span",{class:"bad"}," -"+f.removed))))));
+  if(v.diff){const d=el("details",{style:"margin-top:6px"},el("summary",{},"Show the diff"+(v.diff_cut?" (first part only - the patch files hold all of it)":"")+" - the page stops refreshing while it is open"),diffPre(v.diff));c.append(d);}
   return c;}
 function answerBox(id,question){
   const k="ans:"+id,t=el("textarea",{rows:3,dir:"auto","data-key":k,"aria-label":"Your answer",placeholder:"Your answer (up to 300 characters)",style:"width:100%;margin-top:6px"});
@@ -317,6 +360,8 @@ async function task(){
   const o=await get("/api/overview");
   if(!curTask&&o.tasks.length)curTask=o.tasks[o.tasks.length-1].task_id;   // the newest task
   const t=curTask?await get("/api/task?id="+encodeURIComponent(curTask)):null;   // fetch BEFORE clearing: no blank flash on refresh
+  const wantsReview=t&&!t.error&&(t.state.state==="review"||(t.run&&["waiting_approval","done","rejected"].includes(t.run.status)));
+  const rv=wantsReview?await get("/api/review?id="+encodeURIComponent(curTask)):null;
   const fs=saveFocus();   // the answer box keeps your typing, focus and cursor across the refresh
   m.replaceChildren();
   const sel=el("select",{style:"max-width:100%"});o.tasks.slice().reverse().forEach(x=>{const op=el("option",{value:x.task_id},x.task_id+" ["+(x.waiting_approval?"waiting for you":x.state)+"] "+x.title);if(x.task_id===curTask)op.selected=true;sel.append(op);});
@@ -328,7 +373,7 @@ async function task(){
   t.states.forEach((s,i)=>{const p=el("span",{class:"pill",style:"margin-right:4px;"+(s===cur?"background:var(--acc);color:#fff":"")},s);flow.append(p);});
   if(["blocked","failed","paused"].includes(cur))flow.append(el("span",{class:"pill bad"},cur));
   if(t.state.waiting_approval)flow.append(el("span",{class:"pill warn"},"waiting for approval"));
-  const ctl=runCard(t);
+  const ctl=runCard(t,!!(rv&&!rv.error));
   // delete: two steps, recoverable (moved to trash/), refused by the server while a run is processing the task
   if(delAsk!==curTask){const d=el("button",{style:"margin:6px 0 0 12px;color:var(--bad);border-color:var(--bad)"},"Delete task...");d.onclick=()=>{delAsk=curTask;tick();};ctl.append(d);}
   else{const id=curTask,yes=el("button",{style:"margin:6px 6px 0 0;color:var(--bad);border-color:var(--bad)"},"Yes, delete "+id),no=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
@@ -340,6 +385,7 @@ async function task(){
   m.append(flow);
   if(t.attention)m.append(el("div",{class:"card alert",style:t.attention.level==="warn"?"border-color:var(--warn)":""},el("b",{},"Needs you: "),t.attention.text));
   m.append(ctl);                    // what is happening and the next action, before the details
+  if(rv&&!rv.error)m.append(reviewCard(rv));
   m.append(requirementCard(t));
   // plan and dependencies
   const wk=el("div",{class:"card"},el("b",{},"Plan and dependencies"),el("span",{class:"mut"},"  last activity "+ago(t.idle_min)));
@@ -401,6 +447,7 @@ async function approvals(){
   r.pending.forEach(a=>{
     const box=el("div",{class:"msg"},el("div",{},el("span",{class:"pill warn"},a.gate)," ",a.task_id+" — "+a.task_title+" ["+a.task_state+"]"),el("pre",{},a.context));
     if(a.gate==="requirements"){const o=el("button",{style:"margin:6px 6px 0 0"},"Open the conversation");o.onclick=()=>openTask(a.task_id);box.append(o);}
+    if(a.gate==="merge"){const o=el("button",{class:"primary",style:"margin:6px 6px 0 0"},"Open the review (evidence, security, diff)");o.onclick=()=>openTask(a.task_id);box.append(o,el("div",{class:"mut small"},"Approving here does not start the delivery: press Continue in the Task monitor, or use 'Approve and deliver' in the review."));}
     const note=el("input",{placeholder:"note (optional)"});
     [["approved","Approve"],["rejected","Reject"]].forEach(([d,l])=>{const b=el("button",{style:"margin:6px 6px 0 0"},l);b.onclick=async()=>{const x=await post("/api/approval/decide",{id:a.id,decision:d,note:note.value});if(!x.ok)alert(x.body.error);tick();};box.append(b);});
     box.append(note);c.append(box);});

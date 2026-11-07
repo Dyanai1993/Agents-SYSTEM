@@ -14,7 +14,7 @@ TASKS = sorted(p for p in (HERE / "tasks").iterdir() if (p / "task.json").exists
 
 def check(task: Path, ws: Path):
     try:
-        r = subprocess.run([sys.executable, str(task / "check.py"), str(ws)], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([sys.executable, str(task / "check.py"), str(ws)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     except subprocess.TimeoutExpired:           # a hanging solution fails ITS task; it must not abort the whole suite
         return False, "check timed out after 60s"
     return r.returncode == 0, (r.stdout + r.stderr).strip()
@@ -22,7 +22,7 @@ def check(task: Path, ws: Path):
 
 def _git_state():
     def g(*a):
-        r = subprocess.run(["git", *a], cwd=HERE.parent, capture_output=True, text=True)
+        r = subprocess.run(["git", *a], cwd=HERE.parent, capture_output=True, text=True, encoding="utf-8", errors="replace")
         return r.stdout.strip() if r.returncode == 0 else ""
     return g("rev-parse", "HEAD"), g("rev-parse", "--abbrev-ref", "HEAD"), bool(g("status", "--porcelain"))
 

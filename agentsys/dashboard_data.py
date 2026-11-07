@@ -267,6 +267,72 @@ def task_detail(task_id, now=None):
             "requirement": requirement_view(task_id), "run": run_view(task_id, live)}
 
 
+REVIEW_DIFF_MAX = 300_000          # characters of diff shown; the patch files always hold all of it
+_diff_cache = {}                   # (task, commit) -> files + diff: a commit never changes, so it is computed once
+
+
+def _final_report(tdir):
+    finals = sorted((tdir / "reports").glob("test_report-*-FINAL.json")) if (tdir / "reports").is_dir() else []
+    return _json(finals[-1]) if finals else None
+
+
+def review_view(task_id):
+    """One review screen for the merge decision (master prompt, phase B): every acceptance criterion with the final
+    regression checks that cover it (command, result, evidence), the security report, the changed files and the
+    real diff - all of the APPROVAL's commit, so what is shown is exactly what an approval delivers. `stale`: the
+    workspace, requirement or security report changed after the approval was requested; Continue asks again."""
+    from . import approvals, loop, orchestrator
+    if not logger.TASK_ID_RE.match(task_id or ""):
+        return None
+    tdir = config.home() / "tasks" / task_id
+    ws = tdir / "workspace"
+    entry = orchestrator.load_entry(task_id) or {}
+    ap, st = approvals.latest(task_id, "merge")
+    delivery = entry.get("delivery")
+    if ap is None and not delivery:
+        return None
+    sha = orchestrator.approved_sha(ap.get("diff_ref")) if ap else (delivery or {}).get("commit")
+    stale = None
+    if ap and st == "pending" and ws.is_dir():
+        try:
+            stale = orchestrator._merge_request(task_id, tdir)[1] != ap["diff_ref"]
+        except Exception:
+            stale = None
+    req = entry.get("requirements") or _json(tdir / "requirements.json") or {}
+    final = _final_report(tdir) or {}
+    checks = final.get("checks") or []
+
+    def covered(cid):
+        return [{k: c.get(k) for k in ("name", "result", "command", "evidence", "exit_code")}
+                for c in checks if cid in (c.get("criterion_ids") or [])]
+    criteria = [{"id": f"AC{i}", "text": t, "checks": covered(f"AC{i}")} for i, t in enumerate(req.get("acceptance_criteria") or [], 1)]
+    for c in criteria:
+        c["passed"] = bool(c["checks"]) and all(x["result"] == "pass" for x in c["checks"])
+    constraints = [{"id": f"C{i}", "text": t, "checks": covered(f"C{i}")} for i, t in enumerate(req.get("constraints") or [], 1)]
+    files, diff, cut = [], "", False
+    if sha and ws.is_dir():
+        key = (task_id, sha)
+        if key not in _diff_cache:
+            try:
+                base = orchestrator._base(ws)
+                num = loop._git(ws, "diff", "--numstat", f"{base}..{sha}", "--", ".", *orchestrator.JUNK).stdout
+                fl = []
+                for line in num.splitlines():
+                    a, r_, path = (line.split("\t", 2) + ["", ""])[:3]
+                    fl.append({"path": path, "added": a, "removed": r_})
+                text = loop._git(ws, "diff", "--no-color", f"{base}..{sha}", "--", ".", *orchestrator.JUNK).stdout
+                _diff_cache[key] = (fl, text[:REVIEW_DIFF_MAX], len(text) > REVIEW_DIFF_MAX)
+            except Exception:
+                _diff_cache[key] = ([], "", False)
+        files, diff, cut = _diff_cache[key]
+    return {"task_id": task_id, "approval": ap and {"id": ap["id"], "status": st, "created_at": ap.get("created_at")},
+            "commit": sha, "stale": stale, "goal": req.get("goal"), "criteria": criteria, "constraints": constraints,
+            "final": {"verdict": final.get("verdict"), "summary": final.get("summary"), "unmapped": [
+                {k: c.get(k) for k in ("name", "result", "command", "evidence")} for c in checks if not c.get("criterion_ids")]},
+            "security": _json(tdir / "security_report.json"), "files": files, "diff": diff, "diff_cut": cut,
+            "delivery": delivery, "status": entry.get("status")}
+
+
 def run_view(task_id, live=None):
     """What the Task monitor needs for its buttons: the queue status, whether a live process runs it, the user's
     Start/Continue request, a pending control, and why it cannot run now (scheduler.run_blocker)."""

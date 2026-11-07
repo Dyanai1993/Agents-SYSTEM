@@ -51,7 +51,10 @@ your message; running T-0025 with the developer for 12 min), or that it is offli
    the current agent and how long it has been working; the heartbeat proves it is alive (a long agent call is quiet).
 3. When it needs you, the Task monitor says what and offers the one next action: answer its question right there,
    decide an approval (Approvals tab), **Continue** after an approval, **Retry** after a block, **Resume** after a stop.
-4. After you approve the merge, press **Continue**: the patch files go to `deliveries/<task>/`.
+4. **Review** (in the Task monitor): every acceptance criterion with the final checks and their evidence, the security
+   report, the changed files and the real diff - of the exact commit the approval delivers. **Approve and deliver**
+   writes the patch files to `deliveries/<task>/` (and a branch if a target repo was set) and shows a receipt with
+   the patch names, the folder, the commit and how to apply them (`git am`). Nothing is merged into main.
 
 - The worker is the only process that calls a model: it answers chat messages and runs the tasks you Start/Continue,
   never anything else, and makes no call while nothing waits. Only one worker can run. After updating the code,

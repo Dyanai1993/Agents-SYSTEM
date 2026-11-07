@@ -16,7 +16,7 @@ stem = f"phase{n}" if n.isdigit() else n
 spec = json.loads((root / "docs" / "reviews" / f"{stem}.json").read_text(encoding="utf-8"))
 
 def git(*a):
-    r = subprocess.run(["git", *a], cwd=root, capture_output=True, text=True)
+    r = subprocess.run(["git", *a], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.stdout.strip() if r.returncode == 0 else ""
 
 

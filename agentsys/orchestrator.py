@@ -208,22 +208,47 @@ def _delivery_journal(tdir):
     return tdir / "delivery.json"
 
 
-def deliver(task_id, target_repo=None):
-    """Export the workspace history as patches; optionally apply them on a NEW branch of a target repo.
+def approved_sha(diff_ref):
+    """The workspace commit a merge approval is bound to ('git:<sha>:req:...:sec:...'), or None."""
+    parts = str(diff_ref or "").split(":")
+    ok = len(parts) > 1 and parts[0] == "git" and 40 <= len(parts[1]) <= 64 and all(c in "0123456789abcdef" for c in parts[1])
+    return parts[1] if ok else None
+
+
+def deliver(task_id, target_repo=None, commit=None, approval_id=None):
+    """Export the workspace history up to `commit` (the APPROVED commit; HEAD when not given) as patches;
+    optionally apply them on a NEW branch of a target repo. Returns the delivery receipt.
+
+    Master prompt, phase B: the patches are cut from the commit the human approved, never from whatever HEAD is
+    at delivery time. And the folder holds exactly this delivery's patches: they are written to a fresh folder
+    first, then replace the old set (stale patches from an earlier delivery used to be listed AND applied).
 
     Idempotent and self-cleaning: a crash or process failure (ours or git's) must never leave the target
     repo checked out on a half-finished branch that blocks every later retry, and re-running after a
     successful delivery must not try to recreate the branch and fail.
     """
+    import shutil
     tdir = config.home() / "tasks" / task_id
     ws = tdir / "workspace"
     out = config.home() / "deliveries" / task_id
     out.mkdir(parents=True, exist_ok=True)
-    r = loop._git(ws, "format-patch", "-q", "-o", str(out), f"{_base(ws)}..HEAD", "--", ".", *JUNK)
-    patches = sorted(p.name for p in out.glob("*.patch"))
-    if r.returncode or not patches:
+    ws_sha = commit or loop._git(ws, "rev-parse", "HEAD").stdout.strip()
+    if loop._git(ws, "cat-file", "-e", f"{ws_sha}^{{commit}}").returncode:
+        raise RuntimeError(f"the approved commit {ws_sha[:12]} is not in the workspace")
+    fresh = out / f".new-{time.strftime('%Y%m%d-%H%M%S')}"
+    r = loop._git(ws, "format-patch", "-q", "-o", str(fresh), f"{_base(ws)}..{ws_sha}", "--", ".", *JUNK)
+    new = sorted(fresh.glob("*.patch")) if fresh.is_dir() else []
+    if r.returncode or not new:
+        shutil.rmtree(fresh, ignore_errors=True)
         raise RuntimeError(f"nothing to deliver: {r.stderr.strip() or 'no commits'}")
-    result = {"patches_dir": str(out), "patches": patches, "branch": None}
+    for old in out.glob("*.patch"):
+        old.unlink()
+    for p in new:
+        p.replace(out / p.name)
+    shutil.rmtree(fresh, ignore_errors=True)
+    patches = [p.name for p in new]
+    result = {"patches_dir": str(out), "patches": patches, "branch": None, "commit": ws_sha,
+              "approval_id": approval_id, "delivered_at": logger.now()}
     jpath = _delivery_journal(tdir)
     journal = json.loads(jpath.read_text(encoding="utf-8")) if jpath.exists() else None
     if target_repo:
@@ -233,7 +258,6 @@ def deliver(task_id, target_repo=None):
         if loop._git(repo, "rev-parse", "--is-inside-work-tree").returncode:
             raise RuntimeError(f"target repo {repo} is not a git repository")
         branch = f"agentsys/{task_id}"
-        ws_sha = loop._git(ws, "rev-parse", "HEAD").stdout.strip()
         # "ours" means OUR journal, for this exact target_repo+branch, says we are the ones who made it -
         # never inferred just from the branch existing. Without this, deliver() would delete a same-named
         # branch it never created (e.g. the user's own unrelated work).
@@ -489,7 +513,7 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
     if r is not None:
         return r
     try:
-        d = deliver(task_id, entry["target_repo"])
+        d = deliver(task_id, entry["target_repo"], commit=approved_sha(ap.get("diff_ref")), approval_id=ap["id"])
     except RuntimeError as e:
         tasks.set_state(task_id, "blocked", title=entry["title"])
         return finish("blocked", f"delivery failed: {e}")

@@ -52,8 +52,10 @@ def _save(path, doc):
 
 
 def _git(ws, *args, check=False):
-    cmd = ["git", "-c", "user.name=agentsys", "-c", "user.email=agentsys@localhost", *args]
-    return subprocess.run(cmd, cwd=ws, capture_output=True, text=True, check=check)
+    cmd = ["git", "-c", "user.name=agentsys", "-c", "user.email=agentsys@localhost", "-c", "core.quotepath=false", *args]
+    # UTF-8, never the Windows code page: text=True alone decoded git output as cp1252, where a Hebrew diff or file
+    # name raises UnicodeDecodeError (byte 0x90 is undefined there) - the same class of bug as the CLI prompt pipe.
+    return subprocess.run(cmd, cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", check=check)
 
 
 def ensure_workspace(tdir, seed=None):
@@ -77,7 +79,7 @@ def _git_ok(ws, *args, env=None):
     """A git call whose answer DECIDES something: a failure raises instead of reading as 'no changes'.
     Phase 5 review (round 2): a failed `git status` returned '' and passed as a clean workspace."""
     cmd = ["git", "-c", "user.name=agentsys", "-c", "user.email=agentsys@localhost", *args]
-    r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, env=env)
+    r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     if r.returncode != 0:
         raise StepFailed(f"git {' '.join(args[:3])} failed in {ws}: {(r.stderr or r.stdout).strip()[:200]}")
     return r.stdout

@@ -26,8 +26,8 @@ FakeBackend (zero quota), a commit and a push. Live subscription checks only wit
 - [x] run-next CLI publishes a heartbeat too.
 
 ## Phase B - review and delivery
-- [ ] One review screen: criteria, final test results with evidence, security findings, changed files, the diff.
-- [ ] Merge approval bound to requirement revision + commit + security report (exists); deliver exactly the
+- [x] One review screen: criteria, final test results with evidence, security findings, changed files, the diff.
+- [x] Merge approval bound to requirement revision + commit + security report (exists); deliver exactly the
       approved commit; delivery receipt (patch names, folder, branch).
 
 ## Phase C - robustness and UI

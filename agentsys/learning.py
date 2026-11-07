@@ -58,7 +58,7 @@ def _pdir():
 
 
 def _git(*args):
-    return subprocess.run(["git", "-c", "user.name=agentsys", "-c", "user.email=agentsys@localhost", *args], cwd=repo(), capture_output=True, text=True)
+    return subprocess.run(["git", "-c", "user.name=agentsys", "-c", "user.email=agentsys@localhost", *args], cwd=repo(), capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
 def _must(*args):
@@ -292,7 +292,7 @@ def apply(pid, *, run_checks=True):
         if run_checks:
             for name, cmd in (("unit tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "."]),
                               ("eval selfcheck", [sys.executable, "evals/run_evals.py", "selfcheck"])):
-                r = subprocess.run(cmd, cwd=repo(), capture_output=True, text=True, env={k: v for k, v in os.environ.items() if k != "ANTHROPIC_BASE_URL"})
+                r = subprocess.run(cmd, cwd=repo(), capture_output=True, text=True, encoding="utf-8", errors="replace", env={k: v for k, v in os.environ.items() if k != "ANTHROPIC_BASE_URL"})
                 if r.returncode:
                     raise RuntimeError(f"{name} failed: {(r.stdout + r.stderr)[-300:]}")
         _must("add", "--", doc["target"])

@@ -126,3 +126,15 @@ The Approvals list shows only the latest request per task and gate (an older one
 - `orchestrator.apply_control()`: pause / stop / resume take effect at once when no run holds the task (otherwise
   before the next agent call, as before). Stop is reversible: resume requeues from the checkpoint.
 - `scripts/up.py` starts the dashboard and the worker together, after the billing guard.
+
+## Review and delivery (master prompt, phase B)
+- `dashboard_data.review_view()` / GET `/api/review`: the acceptance criteria, each with the final-regression checks
+  that cover it (command, result, evidence), the constraints, the security report, the changed files and the diff.
+  All of it is cut from the commit the merge approval is bound to (its `diff_ref`), not from the workspace's HEAD, so
+  what the review shows is exactly what an approval delivers. `stale` = the identity changed after the request (a
+  new approval will be requested). Diffs are cached per commit (a commit never changes).
+- `orchestrator.deliver(commit=...)` exports `<base>..<approved commit>`; an unknown commit is refused. Patches are
+  written to a fresh folder first and then replace the old set (stale patches used to be listed and applied). The
+  receipt (queue entry `delivery`) holds the patch names, folder, branch, commit, approval id and time.
+- `loop._git` (and every other subprocess call) decodes output as UTF-8 with `core.quotepath=false`: the Windows code
+  page raised UnicodeDecodeError on a Hebrew diff or file name.

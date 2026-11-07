@@ -39,6 +39,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, INDEX.read_bytes(), "text/html")
             if u.path == "/api/overview":
                 return self._send(200, d.overview())
+            if u.path == "/api/review":
+                v = d.review_view(q.get("id", ""))
+                return self._send(200 if v else 404, v or {"error": "no merge review for this task yet"})
             if u.path == "/api/worker":
                 return self._send(200, worker.status(server_build=SERVER_BUILD))
             if u.path == "/api/events":
