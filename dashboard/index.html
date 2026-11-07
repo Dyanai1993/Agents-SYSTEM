@@ -493,9 +493,9 @@ function reviewCard(v){
       list("Patch files ("+dl.patches.length+")",dl.patches),el("div",{class:"mut small"},"Apply them in your repository with: git am \""+dl.patches_dir+"\"\\*.patch")));}
   // criteria and evidence
   const crit=el("table",{style:"margin-top:8px"},el("tr",{},...["","Acceptance criterion","Final checks and evidence"].map(h=>el("th",{},h))));
-  v.criteria.forEach(k=>crit.append(el("tr",{},el("td",{class:k.passed?"ok":"bad"},k.passed?"pass":k.checks.length?"FAIL":"no check"),
+  v.criteria.forEach(k=>crit.append(el("tr",{},el("td",{class:k.passed?"ok":k.unverified?"warn":"bad"},k.passed?"pass":k.unverified?"NOT verified - your call":k.checks.length?"FAIL":"no check"),
     el("td",{dir:"auto"},el("b",{},k.id+" "),k.text),
-    el("td",{},...k.checks.map(x=>el("div",{class:"small"},el("span",{class:x.result==="pass"?"ok":"bad"},x.result+" "),x.name,x.command?el("div",{class:"mut"},el("code",{},x.command)):"",x.evidence?el("div",{class:"mut",dir:"auto"},x.evidence):""))))));
+    el("td",{},...k.checks.map(x=>el("div",{class:"small"},el("span",{class:x.result==="pass"?"ok":x.result==="unverified"?"warn":"bad"},(x.result==="unverified"?"not verified ("+(x.not_verified_because||"?")+")":x.result)+" "),x.name,x.command?el("div",{class:"mut"},el("code",{},x.command)):"",x.evidence?el("div",{class:"mut",dir:"auto"},x.evidence):""))))));
   c.append(crit);
   if(v.constraints.length)c.append(list("Constraints",v.constraints.map(k=>k.id+" "+k.text+(k.checks.length?" - "+k.checks.map(x=>x.result).join(", "):""))));
   c.append(el("div",{style:"margin-top:8px"},el("b",{},"Final regression: "),el("span",{class:v.final.verdict==="pass"?"ok":"bad"},v.final.verdict||"none"),v.final.summary?el("span",{class:"mut",dir:"auto"}," - "+v.final.summary):""));

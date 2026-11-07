@@ -24,7 +24,7 @@ from .filelock import FileLock, LockBusy
 BEAT_S = 5
 STALE_S = 20           # no heartbeat for this long: the process is gone (closed, crashed, or the machine slept)
 ROOT = Path(__file__).resolve().parent.parent
-CODE_GLOBS = ("agentsys/*.py", "scripts/*.py", "dashboard/server.py", ".claude/agents/*.md", "schemas/*.json")
+CODE_GLOBS = ("agentsys/*.py", "agentsys/playbooks/*.md", "scripts/*.py", "dashboard/server.py", ".claude/agents/*.md", "schemas/*.json")
 
 
 class AlreadyRunning(RuntimeError):

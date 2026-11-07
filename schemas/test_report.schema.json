@@ -1,254 +1,286 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "test_report.schema.json",
-  "title": "Tester report",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "verdict",
-    "summary",
-    "design_problem",
-    "constraints_na",
-    "checks"
-  ],
-  "properties": {
-    "verdict": {
-      "enum": [
-        "pass",
-        "fail",
-        "blocked"
-      ]
-    },
-    "verdict_reported": {
-      "enum": [
-        "pass",
-        "fail",
-        "blocked"
-      ]
-    },
-    "summary": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "\\S"
-    },
-    "design_problem": {
-      "type": "boolean"
-    },
-    "design_rationale": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "\\S"
-    },
-    "constraints_na": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "reason"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S"
-          },
-          "reason": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S"
-          }
-        }
-      }
-    },
-    "checks": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "name",
-          "result",
-          "criterion_ids",
-          "command",
-          "evidence"
-        ],
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "\\S"
-          },
-          "result": {
-            "enum": [
-              "pass",
-              "fail",
-              "skipped"
-            ]
-          },
-          "criterion_ids": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Ids like W1.1 or AC2 or C1 that this check verifies"
-          },
-          "command": {
-            "type": "string"
-          },
-          "exit_code": {
-            "type": "integer"
-          },
-          "evidence": {
-            "type": "string",
-            "maxLength": 2000,
-            "description": "Short excerpt of real output. Full output is kept in the tool log."
-          },
-          "severity": {
-            "enum": [
-              "low",
-              "medium",
-              "high",
-              "critical"
-            ]
-          },
-          "repro": {
-            "type": "string"
-          },
-          "probable_cause": {
-            "type": "string"
-          }
-        },
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "result": {
-                  "const": "pass"
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "command": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "\\S"
-                },
-                "criterion_ids": {
-                  "minItems": 1
-                }
-              },
-              "anyOf": [
-                {
-                  "properties": {
-                    "evidence": {
-                      "type": "string",
-                      "minLength": 1,
-                      "pattern": "\\S"
-                    }
-                  }
-                },
-                {
-                  "required": [
-                    "exit_code"
-                  ],
-                  "properties": {
-                    "exit_code": {
-                      "const": 0
-                    }
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "result": {
-                  "const": "fail"
-                }
-              }
-            },
-            "then": {
-              "required": [
-                "severity",
-                "repro",
-                "probable_cause"
-              ],
-              "properties": {
-                "command": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "\\S"
-                },
-                "repro": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "\\S"
-                },
-                "probable_cause": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "\\S"
-                },
-                "evidence": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "\\S"
-                }
-              }
-            }
-          }
-        ]
-      }
-    },
-    "gaps": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Written by the orchestrator: coverage gaps found in this report"
-    }
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "test_report.schema.json",
+ "title": "Tester report",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "verdict",
+  "summary",
+  "design_problem",
+  "constraints_na",
+  "checks"
+ ],
+ "properties": {
+  "verdict": {
+   "enum": [
+    "pass",
+    "fail",
+    "blocked"
+   ]
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "verdict": {
-            "const": "pass"
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "checks": {
-            "items": {
-              "properties": {
-                "result": {
-                  "const": "pass"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "design_problem": {
-            "const": true
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "design_rationale"
-        ]
-      }
+  "verdict_reported": {
+   "enum": [
+    "pass",
+    "fail",
+    "blocked"
+   ]
+  },
+  "summary": {
+   "type": "string",
+   "minLength": 1,
+   "pattern": "\\S"
+  },
+  "design_problem": {
+   "type": "boolean"
+  },
+  "design_rationale": {
+   "type": "string",
+   "minLength": 1,
+   "pattern": "\\S"
+  },
+  "constraints_na": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "reason"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+     },
+     "reason": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+     }
     }
-  ]
+   }
+  },
+  "checks": {
+   "type": "array",
+   "minItems": 1,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "name",
+     "result",
+     "criterion_ids",
+     "command",
+     "evidence"
+    ],
+    "properties": {
+     "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+     },
+     "result": {
+      "enum": [
+       "pass",
+       "fail",
+       "skipped",
+       "unverified"
+      ]
+     },
+     "criterion_ids": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Ids like W1.1 or AC2 or C1 that this check verifies"
+     },
+     "command": {
+      "type": "string"
+     },
+     "exit_code": {
+      "type": "integer"
+     },
+     "evidence": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "Short excerpt of real output. Full output is kept in the tool log."
+     },
+     "severity": {
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "critical"
+      ]
+     },
+     "repro": {
+      "type": "string"
+     },
+     "probable_cause": {
+      "type": "string"
+     },
+     "not_verified_because": {
+      "enum": [
+       "device",
+       "deployment",
+       "visual",
+       "external"
+      ],
+      "description": "Why an 'unverified' check could not be performed. Only for result 'unverified'."
+     }
+    },
+    "allOf": [
+     {
+      "if": {
+       "properties": {
+        "result": {
+         "const": "pass"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "command": {
+         "type": "string",
+         "minLength": 1,
+         "pattern": "\\S"
+        },
+        "criterion_ids": {
+         "minItems": 1
+        }
+       },
+       "anyOf": [
+        {
+         "properties": {
+          "evidence": {
+           "type": "string",
+           "minLength": 1,
+           "pattern": "\\S"
+          }
+         }
+        },
+        {
+         "required": [
+          "exit_code"
+         ],
+         "properties": {
+          "exit_code": {
+           "const": 0
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "result": {
+         "const": "fail"
+        }
+       }
+      },
+      "then": {
+       "required": [
+        "severity",
+        "repro",
+        "probable_cause"
+       ],
+       "properties": {
+        "command": {
+         "type": "string",
+         "minLength": 1,
+         "pattern": "\\S"
+        },
+        "repro": {
+         "type": "string",
+         "minLength": 1,
+         "pattern": "\\S"
+        },
+        "probable_cause": {
+         "type": "string",
+         "minLength": 1,
+         "pattern": "\\S"
+        },
+        "evidence": {
+         "type": "string",
+         "minLength": 1,
+         "pattern": "\\S"
+        }
+       }
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "result": {
+         "const": "unverified"
+        }
+       }
+      },
+      "then": {
+       "required": [
+        "not_verified_because"
+       ],
+       "properties": {
+        "criterion_ids": {
+         "minItems": 1
+        }
+       }
+      }
+     }
+    ]
+   }
+  },
+  "gaps": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   },
+   "description": "Written by the orchestrator: coverage gaps found in this report"
+  }
+ },
+ "allOf": [
+  {
+   "if": {
+    "properties": {
+     "verdict": {
+      "const": "pass"
+     }
+    }
+   },
+   "then": {
+    "properties": {
+     "checks": {
+      "items": {
+       "properties": {
+        "result": {
+         "enum": [
+          "pass",
+          "unverified"
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "design_problem": {
+      "const": true
+     }
+    }
+   },
+   "then": {
+    "required": [
+     "design_rationale"
+    ]
+   }
+  }
+ ]
 }

@@ -306,11 +306,12 @@ def review_view(task_id):
     checks = final.get("checks") or []
 
     def covered(cid):
-        return [{k: c.get(k) for k in ("name", "result", "command", "evidence", "exit_code")}
+        return [{k: c.get(k) for k in ("name", "result", "command", "evidence", "exit_code", "not_verified_because")}
                 for c in checks if cid in (c.get("criterion_ids") or [])]
     criteria = [{"id": f"AC{i}", "text": t, "checks": covered(f"AC{i}")} for i, t in enumerate(req.get("acceptance_criteria") or [], 1)]
     for c in criteria:
         c["passed"] = bool(c["checks"]) and all(x["result"] == "pass" for x in c["checks"])
+        c["unverified"] = bool(c["checks"]) and all(x["result"] == "unverified" for x in c["checks"])   # the human decides
     constraints = [{"id": f"C{i}", "text": t, "checks": covered(f"C{i}")} for i, t in enumerate(req.get("constraints") or [], 1)]
     files, diff, cut = [], "", False
     if sha and ws.is_dir():

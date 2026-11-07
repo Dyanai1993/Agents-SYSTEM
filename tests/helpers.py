@@ -26,7 +26,9 @@ def _item(prompt):
 
 
 def _check(name, result, ids, **kw):
-    c = {"name": name, "result": result, "criterion_ids": ids, "command": "python -m unittest", "evidence": "OK"}
+    # A GOOD report quotes the line of its own scenario; a bare "OK" (an aggregate) no longer proves a behaviour
+    c = {"name": name, "result": result, "criterion_ids": ids, "command": "python -m unittest -v",
+         "evidence": f"{name} ... ok"}
     if result == "fail":
         c.update(evidence="AssertionError", severity="high", repro="run it", probable_cause="bug")
     if result == "skipped":

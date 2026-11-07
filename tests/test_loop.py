@@ -124,7 +124,7 @@ class LoopTests(TmpHome):
     def test_a_misquoted_command_gets_one_redo_instead_of_blocking_the_task(self):
         """Seen live (T-0023, T-0025): the tester reported `cd ... && grep ...` but had run `grep ... plan.html`. The
         evidence rule rightly rejected it - and one misquote blocked the whole task. Now: one redo, told why."""
-        log = {"tester": [{"tool": "Bash", "command": "python -m unittest", "output": "OK", "is_error": False}]}
+        log = {"tester": [{"tool": "Bash", "command": "python -m unittest -v", "output": "all ... ok", "is_error": False}]}
 
         def misquoted(prompt):
             _, ids, _ = _item(prompt)
@@ -704,8 +704,13 @@ class SemanticsTests(unittest.TestCase):
         labelled_fake = report("pass", [_check("x", "pass", ["W1.1"], command="zzz", evidence="stderr: foo.py: x.txt: No such file or directory")])
         log2 = [{"tool": "Bash", "command": "python wc.py nope.txt", "output": "wc.py: nope.txt: No such file or directory"}]
         self.assertTrue(semantics.evidence_errors(labelled_fake, log2, strict=True))  # only the generic words match: 63% < 75%
-        shortened = report("pass", [_check("x", "pass", ["W1.1"], command="zzz", evidence="Ran 3 tests ... OK")])
-        self.assertEqual(semantics.evidence_errors(shortened, log, strict=True), [])   # real output, shortened with '...'
+        shortened = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="Ran 3 tests ... OK")])
+        self.assertEqual(semantics.evidence_errors(shortened, log, strict=True), [])   # its own output, shortened with '...'
+        borrowed = report("pass", [_check("x", "pass", ["W1.1"], command="zzz", evidence="Ran 3 tests ... OK")])
+        self.assertTrue(semantics.evidence_quality_errors(borrowed, {"W1.1": "the counter prints the number of words"}))
+        grep_log = [{"tool": "Bash", "command": "grep -n test_counts_words tests/test_wc.py", "output": "12: def test_counts_words(self):"}]
+        grep_only = report("pass", [_check("x", "pass", ["W1.1"], command="python -m unittest", evidence="def test_counts_words(self):")])
+        self.assertTrue(semantics.evidence_errors(grep_only, grep_log, strict=True))   # a test's NAME is not its result
 
     def test_command_really_ran_but_claimed_outcome_is_fabricated(self):
         """Review (third round): a command match alone, with no output check at all, let a report claim

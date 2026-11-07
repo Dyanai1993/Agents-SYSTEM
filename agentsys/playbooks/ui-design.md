@@ -46,3 +46,19 @@ keywords: ui, ux, design, page, screen, screens, layout, theme, visual, button, 
 ## Self-check before you say done
 Picture the screen at 390px and at 1280px, in light and dark: is the primary action obvious? Is spacing consistent?
 Is any element still in browser-default styling? Does every interactive element show focus? Would a designer ship it?
+
+## Procedure for a screen (every role, before calling it done)
+1. Who does this screen serve, and what do they need to understand in the first five seconds?
+2. What is the ONE first useful action? Make it the most prominent element. Everything else is secondary - settings,
+   rarely used controls and technical status belong in a secondary area (a settings section, a menu, a footer).
+3. What does the user see in every state: first visit, in progress (with progress and a way to wait or cancel),
+   success, failure (what happened, in plain words) and recovery (the one action that fixes it)?
+4. Where does keyboard focus go after each action? A control that disappears must hand focus to its replacement
+   (the progress region, the result message, the retry button) - never to the page body.
+5. Evidence: look at the real rendered result at the agreed widths and themes (a screenshot you actually opened, or a
+   check of computed layout), then write one or two sentences judging it against points 1-4. "Renders" is not
+   evidence that it is usable.
+
+Seen in the FirstWords benchmark (T-0026): the first screen listed features (sample tiles, download, update, three
+theme buttons) with equal weight and no guidance, so a first-time adult beginner did not know what to do first; and
+activating Download removed the focused button, leaving focus on the page body.

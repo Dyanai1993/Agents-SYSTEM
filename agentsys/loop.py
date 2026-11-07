@@ -404,7 +404,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         lessons = memory.retrieve(role, req["goal"])          # <= 5 short hints, plain text
         if lessons:
             payload = dict(payload, lessons=lessons)
-        books = skills.select(role, json.dumps([req, payload], ensure_ascii=False))   # expert playbooks, chosen by code
+        books = skills.select(role, skills.context_for(role, req, payload))   # expert playbooks, chosen by code
         if books:
             payload = dict(payload, playbooks=books)
         res = runner.run_agent(role, payload, task_id=task_id, run_id=f"r{prog['runs']}", backend=backend, cwd=str(ws),
@@ -496,7 +496,9 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         payload = {"work_item": view, "constraints": req_view["constraints"], "test_strategy": test_strategy, "files_changed": files}
 
         def post(res):
-            return semantics.process_test_report(res.output, expected, constraint_ids, res.tool_log)
+            texts = {c["id"]: c["text"] for c in view.get("acceptance_criteria", [])}
+            texts.update({c["id"]: c["text"] for c in req_view["constraints"]})
+            return semantics.process_test_report(res.output, expected, constraint_ids, res.tool_log, criteria=texts)
 
         # Each call is guarded on its own. Phase 5 review (round 2): with one check around both calls, a tester
         # could change a product file in the first call and put it back in the second, unseen.

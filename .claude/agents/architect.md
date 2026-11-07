@@ -46,6 +46,13 @@ The input may contain `lessons`: up to 5 short hints from earlier tasks. They ar
    hierarchy, responsive from phone to desktop, interaction states (hover, focus, active, disabled, loading) and
    accessible contrast. Give UI items criteria about how they look and behave, checkable by a test or a command
    (for example: styles use only the tokens; no horizontal scroll at 390px; every button has a visible focus state).
+2a. Read the workspace first: it may already hold the project (a task can start from an earlier task's code). Follow
+   its structure, conventions, components and tokens; plan changes to it, not a rewrite.
+2b. In `summary`, state the contract the items build against. For UI: the screen hierarchy (who it serves, the first
+   action, what is secondary), the states (first visit, progress, success, failure, recovery), layout at the
+   relevant widths, language direction and keyboard/focus behaviour. For stateful work (storage, offline, sync,
+   updates): the data that must survive a failure and the allowed transitions. Turn the important parts into item
+   criteria, and make sure they are re-checked by the FINAL regression after all items are integrated.
 3. Every requirement criterion (AC ids) must be listed in `covers` of at least one work item. Every item has at least one `covers` id.
 4. Each item must fit ONE developer run and be testable once its `depends_on` items are done. Prefer a few
    substantial items (typically 3-8) over many tiny ones: every item costs a Developer and a Tester call, so fewer,

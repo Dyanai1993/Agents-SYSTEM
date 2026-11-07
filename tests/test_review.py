@@ -30,7 +30,7 @@ class ReviewTests(TmpHome):
         self.assertEqual(v["commit"], orchestrator.approved_sha(ap["diff_ref"]))
         self.assertIs(v["stale"], False)
         self.assertEqual([c["id"] for c in v["criteria"]], ["AC1"])
-        self.assertTrue(v["criteria"][0]["passed"]); self.assertEqual(v["criteria"][0]["checks"][0]["evidence"], "OK")
+        self.assertTrue(v["criteria"][0]["passed"]); self.assertEqual(v["criteria"][0]["checks"][0]["evidence"], "all ... ok")
         self.assertEqual(v["final"]["verdict"], "pass")
         self.assertIn("app.py", [f["path"] for f in v["files"]])
         self.assertIn("שלום", v["diff"])                                   # UTF-8 from git, not the Windows code page

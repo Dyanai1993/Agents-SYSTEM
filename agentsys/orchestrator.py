@@ -286,7 +286,12 @@ def _merge_request(task_id, tdir):
     sec_hash = hashlib.sha256(sec_bytes).hexdigest()[:16] if sec_bytes is not None else "none"
     summary = (tdir / "summary.md").read_text(encoding="utf-8") if (tdir / "summary.md").exists() else ""
     stat = loop._git(ws, "diff", "--stat", f"{_base(ws)}..{ws_sha}", "--", ".", *JUNK).stdout.strip()
-    context = (f"{_security_summary(task_id, sec_bytes)}\n\n{_cut(summary, SUMMARY_CHARS)}\n\nChanged files:\n{stat}\n\n"
+    finals = sorted((tdir / "reports").glob("test_report-*-FINAL.json")) if (tdir / "reports").is_dir() else []
+    unv = (json.loads(finals[-1].read_text(encoding="utf-8")).get("unverified") or []) if finals else []
+    not_verified = ("NOT VERIFIED - decide these yourself (the tester could not perform them):\n" + "\n".join(
+        f"- {', '.join(x.get('criterion_ids') or [])} {_cut(x.get('name'), 80)} ({x.get('because')}): {_cut(x.get('why'), 120)}"
+        for x in unv[:10]) + "\n\n") if unv else ""
+    context = (f"{not_verified}{_security_summary(task_id, sec_bytes)}\n\n{_cut(summary, SUMMARY_CHARS)}\n\nChanged files:\n{stat}\n\n"
                f"Approving prepares patch files (and a branch `agentsys/{task_id}` if a target repo was given). Nothing is merged into main.")
     return context, f"git:{ws_sha}:req:{req_hash}:sec:{sec_hash}"
 

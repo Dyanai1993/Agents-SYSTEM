@@ -23,3 +23,18 @@ keywords: test, tests, testing, qa, vitest, jest, pytest, unittest, playwright
 ## Evidence
 - Run the exact command and report its real output. Never claim a pass you did not see. One check per scenario,
   with the command as typed and an excerpt copied from its output.
+
+## Procedure: a check that proves something
+1. Drive the real code path: real clicks, real key presses, real handlers. Never intercept events before the app
+   (a capture-phase listener with `stopPropagation()` proves only that keys produce events - T-0026's keyboard test
+   did exactly this and the app's handlers never ran).
+2. Assert the observable outcome: the text, state or file the user would see, and where focus ends up.
+3. Prove the check can fail: break the behaviour on purpose (or name the exact broken implementation it rejects) and
+   see the check fail. A check that cannot fail proves nothing.
+4. Bind the result to its own run: the command you ran for THIS scenario and an excerpt of ITS output. Not evidence
+   for a criterion: an unrelated command, a grep of a test's name, an aggregate count ("Ran 42 tests, OK"), or a
+   file merely existing. Several scenarios may share one command when each has its own distinct line in the output.
+5. A genuine expected failure is valid evidence when the scenario is "this must fail" (exit code 1, an error message).
+6. Be honest about what was not performed: a phone install, a hosted HTTPS deployment, a visual judgement you did not
+   make. Report those as not verified - never infer them (T-0026 counted `<link rel="manifest">` as proof the app
+   installs on Android and iPhone).

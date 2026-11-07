@@ -60,12 +60,15 @@ def derive_verdict(report: dict, expected_ids, constraint_ids):
     if skipped:
         reasons.append(f"skipped checks: {', '.join(skipped)}")
     passed = {i for c in checks if c["result"] == "pass" for i in c["criterion_ids"]}
+    # Not performed for a reason outside the tester's reach (a phone, a hosted deployment, a visual judgement, an
+    # external service): never a pass, not a blocker either - the human sees it in the review (report["unverified"]).
+    unverified = {i for c in checks if c["result"] == "unverified" for i in c["criterion_ids"]}
     for cid in expected_ids:
-        if cid not in passed:
+        if cid not in passed and cid not in unverified:
             reasons.append(f"criterion {cid} has no passing check")
     na = {x["id"] for x in report["constraints_na"]}
     for cid in constraint_ids:
-        if cid not in passed and cid not in na:
+        if cid not in passed and cid not in na and cid not in unverified:
             reasons.append(f"constraint {cid} is neither checked nor marked not-applicable")
     return ("blocked" if reasons else "pass"), reasons
 
@@ -148,10 +151,10 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         return ["backend gave no tool log: evidence cannot be verified"] if strict else []
     bash = [t for t in tool_log if t.get("tool") == "Bash"]
     ran = [norm(t.get("command", "")) for t in bash]
-    outputs = _squash(" ".join(t.get("output", "") for t in bash))
+    run_outputs = _squash(" ".join(t.get("output", "") for t in bash if not _is_text_search(t.get("command", ""))))
     errs = []
     for c in report["checks"]:
-        if c["result"] == "skipped":
+        if c["result"] in ("skipped", "unverified"):
             continue
         cmd = norm(c["command"])
         # Only "claimed command is a substring of something really logged" counts. The reverse ("logged
@@ -164,7 +167,11 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
             own_output = _squash(" ".join(t.get("output", "") for t in matched))
             if _evidence_in_output(c["evidence"], own_output):
                 continue
-        if _evidence_in_output(c["evidence"], outputs):     # batched-script case: no single command matches, evidence is real somewhere in the log
+        # Batched-script case (seen live, T-0001): one script ran several scenarios, the check names the scenario's own
+        # command. Its evidence may come from another call's output - but only from a call that RAN something: the
+        # output of a grep, cat or ls (a test's name, a line of source) never proves that a behaviour works. Aggregate
+        # counts are refused by evidence_quality_errors. (The benchmark brief: no proof from unrelated output.)
+        if _evidence_in_output(c["evidence"], run_outputs):
             continue
         ev_len = len(_squash(re.sub(r"\.\.\.|…", "", c["evidence"] or "")))
         if by_command and ev_len < MIN_EVIDENCE_CHARS:
@@ -179,13 +186,67 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
     return errs
 
 
-def process_test_report(report, expected_ids, constraint_ids, tool_log):
+_AGGREGATE_LINE = re.compile(
+    r"^\s*(ran \d+ tests?( in [\d.]+ ?s)?|ok( \(.*\))?|passed|all tests passed|\d+ (tests? )?passed.*|tests?:?\s+\d+ passed.*"
+    r"|test files:?\s+\d+ passed.*|\d+ passing.*|=+ \d+ passed.*|test result: ok.*)\s*$", re.I)
+_SUITE_CRITERION = re.compile(r"\b(test suite|all tests|the tests|unit tests|tests? (pass|run|complete)|type ?checks?|the build|"
+                              r"production build|lint)\b", re.I)
+_TEXT_SEARCH = re.compile(r"^\s*(?:cd\s+\S+\s*(?:&&|;)\s*)*(grep|egrep|rg|findstr|select-string|cat|type|head|tail|ls|dir|find|wc|"
+                          r"git\s+grep|git\s+show|git\s+diff)\b", re.I)
+_STATIC_CRITERION = re.compile(r"\b(files?|folders?|director(y|ies)|source|code|locale|strings?|imports?|depend\w*|package\w*|"
+                               r"librar\w+|stdlib|readme|licen[cs]es?|comments?|hard-?coded|contains?|defined|declared|config\w*|"
+                               r"manifest|tokens?|externali[sz]ed|schemas?)\b", re.I)
+
+
+def _is_aggregate(evidence: str) -> bool:
+    lines = [ln for ln in re.split(r"[\r\n]+|\s*\|\|\s*|\s*(?:\.\.\.|…)\s*", evidence or "") if ln.strip()]
+    return bool(lines) and all(_AGGREGATE_LINE.match(ln) for ln in lines)
+
+
+_RUNNERS = {"npm", "npx", "pnpm", "yarn", "node", "python", "python3", "py", "pytest", "vitest", "jest", "playwright", "curl",
+            "wget", "make", "cargo", "go", "java", "dotnet", "deno", "bun", "sh", "bash", "pwsh"}
+
+
+def _is_text_search(command: str) -> bool:
+    """A command that only reads or lists text (grep, cat, ls...) and runs nothing: a runner counts only as a whole
+    command word (`python x.py`, `| node`), never inside a file name (`tests/test_wc.py`)."""
+    if not _TEXT_SEARCH.match(command or ""):
+        return False
+    words = [w for w in re.split(r"[\s|;&()]+", command) if w]
+    return not any(w.lower() in _RUNNERS or w.startswith("./") for w in words)
+
+
+def evidence_quality_errors(report: dict, criteria: dict) -> list:
+    """A passing check must prove the criterion it names (the benchmark brief): an aggregate count ("Ran 42 tests",
+    "12 passed") proves only a criterion about the whole suite or the build; a text search or listing of source
+    (grep, cat, ls...) proves only a criterion about source text or files - never that a behaviour works.
+    Constraints (C ids) are often about the code itself and are not judged here. `criteria`: id -> text."""
+    errs = []
+    if not criteria:
+        return errs
+    for c in report["checks"]:
+        if c["result"] != "pass":
+            continue
+        for cid in c["criterion_ids"]:
+            text = criteria.get(cid)
+            if text is None or cid.startswith("C"):
+                continue
+            if _is_aggregate(c["evidence"]) and not _SUITE_CRITERION.search(text):
+                errs.append(f"check '{c['name']}': an aggregate count ({c['evidence'][:60]!r}) does not prove {cid} "
+                            f"({text[:80]!r}): quote the output of the scenario that shows it")
+            elif _is_text_search(c["command"]) and not (_STATIC_CRITERION.search(text) or _SUITE_CRITERION.search(text)):
+                errs.append(f"check '{c['name']}': a text search or listing ({c['command'][:60]!r}) does not prove that "
+                            f"{cid} works ({text[:80]!r}): run the behaviour and quote its output")
+    return errs
+
+
+def process_test_report(report, expected_ids, constraint_ids, tool_log, criteria=None):
     """Used as run_agent post_process for the tester. Overrides the verdict with the derived one.
 
     Returns a list of hard errors. Reported 'pass' with failing checks is corrected to 'fail'.
     A reported fail/blocked while every check passed is inconsistent: hard error.
     """
-    errs = evidence_errors(report, tool_log)
+    errs = evidence_errors(report, tool_log) + evidence_quality_errors(report, criteria or {})
     derived, reasons = derive_verdict(report, expected_ids, constraint_ids)
     reported = report["verdict"]
     if derived == "pass" and reported != "pass":
@@ -194,6 +255,10 @@ def process_test_report(report, expected_ids, constraint_ids, tool_log):
         return errs
     report["verdict_reported"] = reported
     report["verdict"] = derived
+    unv =[{"name": c["name"], "criterion_ids": c["criterion_ids"], "because": c.get("not_verified_because"),
+            "why": c["evidence"][:200]} for c in report["checks"] if c["result"] == "unverified"]
+    if unv:
+        report["unverified"] = unv                      # shown in the review and in the merge approval
     if reasons and derived == "blocked":
         report["summary"] = (report["summary"] + " | " + "; ".join(reasons))[:600]
         report["gaps"] = reasons
