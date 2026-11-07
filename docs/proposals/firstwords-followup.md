@@ -28,10 +28,12 @@ neither problem.
 ## Recommendation: two small tasks, in this order
 
 **A before B.** A fixes a path that deletes the user's working offline copy. B then lays out and styles the final
-screen, including A's progress, failure and retry states. Each task stays small (A has 5 criteria, B has 9 including
+screen, including A's progress, failure and retry states. Each task stays small (A has 6 criteria, B has 9, each including
 the regression), which avoids the oversized loop T-0025 needed narrowing for.
 
-### Task A - offline recovery (start from the T-0026 repository, branch `agentsys/T-0026`)
+### Task A - offline recovery (D-0007; starts from the T-0026 repository, branch `agentsys/T-0026`)
+
+D-0007 holds this requirement, with its project repository already set. It is ready to submit.
 
 Goal: the offline copy is never lost or replaced by an unverified build. Every failure says what happened and
 offers the one action that fixes it.
@@ -56,6 +58,7 @@ Acceptance criteria:
    - Activating Download moves focus to the progress region, then to the result message or to Retry.
    - Enter on Retry retries.
    - Focus never falls to the page body.
+6. Every check that T-0026 defined still passes.
 
 ### Task B - first screen and visual polish (D-0006 revision 4; start from Task A's branch)
 
