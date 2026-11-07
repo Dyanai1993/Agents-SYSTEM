@@ -53,6 +53,15 @@ def handle_post(path, body, headers):
             if body.get("action") not in ("pause", "stop", "resume"):
                 return 400, {"error": "action must be pause, stop or resume"}
             return 200, control.set_control(str(body.get("task_id", "")), body["action"])
+        if path == "/api/task/delete":
+            try:
+                return 200, orchestrator.delete_task(str(body.get("task_id", "")))
+            except orchestrator.TaskBusy as e:
+                return 409, {"error": f"{e}. Stop it and wait for the run to end, then delete."}
+            except KeyError as e:
+                return 404, {"error": str(e).strip("'\"")}
+            except RuntimeError as e:
+                return 500, {"error": str(e)[:200]}
         if path.startswith("/api/assistant/"):
             return _assistant(path, body)
     except (approvals.ApprovalError, ValueError, schema.SchemaError) as e:

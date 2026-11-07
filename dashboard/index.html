@@ -266,14 +266,15 @@ async function messages(){
   }
   document.getElementById("list").replaceChildren(box.children.length?box:el("div",{class:"card"},"No messages."));
 }
-let curTask="";
+let curTask="",delAsk=null,taskNote=null;
 async function task(){
   const o=await get("/api/overview");
-  if(!curTask&&o.tasks.length)curTask=o.tasks[0].task_id;
+  if(!curTask&&o.tasks.length)curTask=o.tasks[o.tasks.length-1].task_id;   // the newest task
   const t=curTask?await get("/api/task?id="+encodeURIComponent(curTask)):null;   // fetch BEFORE clearing: no blank flash on refresh
   m.replaceChildren();
-  const sel=el("select",{});o.tasks.forEach(x=>{const op=el("option",{value:x.task_id},x.task_id+" — "+x.title);if(x.task_id===curTask)op.selected=true;sel.append(op);});
-  sel.onchange=()=>{curTask=sel.value;tick();};m.append(el("div",{class:"card"},sel));
+  const sel=el("select",{style:"max-width:100%"});o.tasks.slice().reverse().forEach(x=>{const op=el("option",{value:x.task_id},x.task_id+" ["+(x.waiting_approval?"waiting for you":x.state)+"] "+x.title);if(x.task_id===curTask)op.selected=true;sel.append(op);});
+  sel.onchange=()=>{curTask=sel.value;delAsk=null;taskNote=null;tick();};
+  const head=el("div",{class:"card"},el("b",{},"Task "),sel);if(taskNote)head.append(el("div",{class:taskNote.cls,style:"margin-top:6px"},taskNote.text));m.append(head);
   if(!t||t.error){m.append(el("div",{class:"card"},curTask?"Task not found.":"No tasks yet."));return;}
   const cur=t.state.state||"",b=t.budget;
   const flow=el("div",{class:"card"});
@@ -283,6 +284,14 @@ async function task(){
   const ctl=el("div",{class:"card"});
   [["pause","Pause"],["resume","Resume"],["stop","Stop"]].forEach(([a,l])=>{const b=el("button",{style:"margin-right:6px"},l);b.onclick=async()=>{if(a==="stop"&&!confirm("Stop task "+curTask+"?"))return;const r=await post("/api/control",{task_id:curTask,action:a});if(!r.ok)alert(r.body.error);tick();};ctl.append(b);});
   ctl.append(el("span",{class:"mut"},"  (writes a control file; the loop reads it before every agent call)"));
+  // delete: two steps, recoverable (moved to trash/), refused by the server while a run is processing the task
+  if(delAsk!==curTask){const d=el("button",{style:"margin-left:12px;color:var(--bad);border-color:var(--bad)"},"Delete task...");d.onclick=()=>{delAsk=curTask;tick();};ctl.append(d);}
+  else{const id=curTask,yes=el("button",{style:"margin:6px 6px 0 0;color:var(--bad);border-color:var(--bad)"},"Yes, delete "+id),no=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
+    yes.onclick=async()=>{yes.disabled=true;const r=await post("/api/task/delete",{task_id:id});delAsk=null;
+      if(r.ok){curTask="";taskNote={cls:"ok",text:"Deleted "+id+". It was moved to "+r.body.moved_to+" - move it back to restore it."};}else taskNote={cls:"bad",text:"Not deleted: "+r.body.error};tick();};
+    no.onclick=()=>{delAsk=null;tick();};
+    ctl.append(el("div",{class:"alert",style:"margin-top:8px"},el("b",{},"Delete "+id+"?"),
+      el("div",{},"It leaves the queue, the dashboard and the approvals list. Nothing is erased: the task folder (with its workspace) moves to trash/, so you can restore it. Patch files already delivered and the usage history are kept."),yes,no));}
   m.append(flow);
   if(t.attention)m.append(el("div",{class:"card alert",style:t.attention.level==="warn"?"border-color:var(--warn)":""},el("b",{},"Needs you: "),t.attention.text));
   m.append(requirementCard(t));
@@ -395,6 +404,11 @@ async function learning(){
 const views={assistant:assistantView,overview,activity,messages,task,quality,approvals,usage,learning,alerts};
 async function tick(auto){try{const ap=await get("/api/approvals");const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view](auto);document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
+// A rebuild closes an open native dropdown (seen: the task picker shut after a second): hold the refresh while a
+// dropdown is in use - from focus/click until you pick, leave it, or 15 s pass.
+let holdUntil=0;
+["focusin","mousedown","keydown"].forEach(ev=>document.addEventListener(ev,e=>{if(e.target.matches?.("select"))holdUntil=Date.now()+15000;}));
+["change","focusout"].forEach(ev=>document.addEventListener(ev,e=>{if(e.target.matches?.("select"))holdUntil=0;}));
 // Auto refresh pauses while you type in a box it cannot restore; boxes with data-key (the assistant chat) keep refreshing.
-tick();setInterval(()=>{const a=document.activeElement;if(!document.querySelector("details[open]")&&!(a.matches?.("input,textarea")&&!a.dataset.key))tick(true);},2500);
+tick();setInterval(()=>{const a=document.activeElement;if(Date.now()>=holdUntil&&!document.querySelector("details[open]")&&!(a.matches?.("input,textarea")&&!a.dataset.key))tick(true);},2500);
 </script></body></html>

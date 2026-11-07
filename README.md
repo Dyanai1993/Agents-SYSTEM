@@ -68,6 +68,7 @@ python scripts/orch.py pending        # or use the dashboard: Approvals tab
 python scripts/orch.py approve T-0010-merge-1
 python scripts/orch.py run-next       # delivers patches (and branch agentsys/T-0010 in the target repo)
 python scripts/orch.py pause|stop|resume T-0010
+python scripts/orch.py delete T-0010  # or Task monitor -> Delete task: moves it to trash/ (recoverable), never while it runs
 ```
 `submit --goal G --criteria C` gives a structured requirement directly and skips the requirement approval.
 Approving a merge never merges into `main` and never pushes: it writes patch files to `deliveries/<task>/` and, with `--target-repo`, creates a new branch there.

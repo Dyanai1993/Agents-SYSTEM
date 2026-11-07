@@ -327,4 +327,4 @@ def view(sid):
     s = load(sid)
     task = orchestrator.load_entry(s["submitted"]["task_id"]) if s["submitted"] else None
     return dict(s, summary=summary(s), blockers=readiness(s), ready=not readiness(s),
-                task_status=(task or {}).get("status"))
+                task_status=task["status"] if task else ("deleted" if s["submitted"] else None))

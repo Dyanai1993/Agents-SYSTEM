@@ -75,3 +75,7 @@ def _run_next_task(*, backend, env, settings_paths, now, estimate_items):
         return orchestrator.process(e["task_id"], backend=backend, env=env, settings_paths=settings_paths)
     except orchestrator.TaskBusy as busy:
         return {"skipped": str(busy), "task_id": e["task_id"]}
+    except KeyError:
+        if orchestrator.load_entry(e["task_id"]) is None:     # deleted between pick() and its lock: nothing to do
+            return {"skipped": "the task was deleted", "task_id": e["task_id"]}
+        raise

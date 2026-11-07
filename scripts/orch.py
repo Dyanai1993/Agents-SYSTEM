@@ -30,6 +30,7 @@ for n in ("pause", "stop", "resume"):
     x = sub.add_parser(n); x.add_argument("task_id")
 sub.add_parser("lessons"); sub.add_parser("proposals")
 x = sub.add_parser("retry"); x.add_argument("task_id"); x.add_argument("--answer")
+x = sub.add_parser("delete"); x.add_argument("task_id")    # moves it to trash/ (recoverable), never while it runs
 x = sub.add_parser("review-lessons"); x.add_argument("--force", action="store_true"); x.add_argument("--backend", default="cli", choices=["cli", "sdk"])
 x = sub.add_parser("apply-proposal"); x.add_argument("id")
 x = sub.add_parser("recover-proposal"); x.add_argument("id")
@@ -82,6 +83,14 @@ elif a.cmd in ("approve", "reject"):
 elif a.cmd == "retry":
     e = orchestrator.retry(a.task_id, a.answer)
     print("queued again:", e["task_id"], "-", e["note"])
+elif a.cmd == "delete":
+    try:
+        r = orchestrator.delete_task(a.task_id)
+    except orchestrator.TaskBusy as e:
+        sys.exit(f"{e}. Stop it and wait for the run to end, then delete.")
+    except (KeyError, ValueError, RuntimeError) as e:
+        sys.exit(str(e).strip("'\""))
+    print(f"deleted {r['task_id']} (moved to {r['moved_to']}; move it back to restore)")
 elif a.cmd == "lessons":
     print((memory.config.home() / "memory" / "lessons.md").read_text() if (memory.config.home() / "memory" / "lessons.md").exists() else "no lessons yet")
 elif a.cmd == "proposals":

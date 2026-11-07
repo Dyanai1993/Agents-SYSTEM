@@ -341,11 +341,42 @@ def in_requirement_phase(entry):
 
 
 def next_task_id():
-    """The next free T-#### id (dashboard submissions)."""
+    """The next free T-#### id (dashboard submissions). A deleted task's id is never reused: its trash folder and its
+    deliveries still carry it."""
     import re as _re
-    nums = [int(m.group(1)) for d in (_qdir(), config.home() / "tasks") if d.is_dir()
-            for p in d.iterdir() if (m := _re.fullmatch(r"T-(\d{4})(\.json)?", p.name))]
+    h = config.home()
+    nums = [int(m.group(1)) for d in (_qdir(), h / "tasks", h / "trash", h / "deliveries") if d.is_dir()
+            for p in d.iterdir() if (m := _re.fullmatch(r"T-(\d{4})(\.json|-.+)?", p.name))]
     return f"T-{max(nums, default=0) + 1:04d}"
+
+
+def delete_task(task_id):
+    """Take a task off the queue, the dashboard and the approvals list. Recoverable: everything is MOVED, not erased,
+    to trash/<task>-<time>/ (the task folder with its workspace, its approval files, its queue entry). Refused while a
+    run is processing it (TaskBusy). Kept: deliveries you already received and the usage history (state/window.json)."""
+    import shutil
+    import time
+    task_id = logger.safe_task_id(task_id)
+    h = config.home()
+    with _Lock(task_id):                               # no run can start or continue on it while we move it
+        q, tdir = _qdir() / f"{task_id}.json", h / "tasks" / task_id
+        if not q.exists() and not (tdir / "state.json").exists():   # a task, not e.g. a draft session's ledger folder
+            raise KeyError(f"no task {task_id}")
+        dest = h / "trash" / f"{task_id}-{time.strftime('%Y%m%d-%H%M%S')}"
+        dest.mkdir(parents=True)
+        if tdir.exists():                              # first: the step most likely to fail (a file open on Windows),
+            try:                                       # and if it does, nothing else has changed yet
+                shutil.move(str(tdir), str(dest / "task"))
+            except OSError as e:
+                dest.rmdir()
+                raise RuntimeError(f"could not move tasks/{task_id} (is a file in it open?): {e}") from e
+        for kind in ("pending", "decided"):
+            for p in (h / "approvals" / kind).glob(f"{task_id}-*.json"):
+                (dest / "approvals" / kind).mkdir(parents=True, exist_ok=True)
+                p.replace(dest / "approvals" / kind / p.name)
+        if q.exists():
+            q.replace(dest / "queue.json")
+    return {"task_id": task_id, "moved_to": str(dest)}
 
 
 def _process(task_id, *, backend, env=None, settings_paths=None):

@@ -612,6 +612,62 @@ class DashboardActionTests(TmpHome):
         self.assertTrue(any(i["task_id"] == "t2" and i["level"] == "bad" for i in dd.alerts_view()["items"]))
 
 
+class DeleteTaskTests(TmpHome):
+    """Delete = move to trash/ (recoverable): off the queue, the dashboard and the approvals list."""
+    H = DashboardActionTests.H
+
+    def make(self, tid="T-0007"):
+        orchestrator.submit(tid, requirements=REQ, title="x")
+        loop.ensure_workspace(self.home / "tasks" / tid)
+        approvals.request(tid, "merge", "ctx")
+        return tid
+
+    def test_delete_moves_everything_to_trash_and_the_id_is_never_reused(self):
+        tid = self.make()
+        code, body = actions.handle_post("/api/task/delete", {"task_id": tid}, self.H)
+        self.assertEqual(code, 200, body)
+        dest = self.home / "trash" / body["moved_to"].replace("\\", "/").split("/")[-1]
+        self.assertTrue((dest / "queue.json").exists())
+        self.assertTrue((dest / "task" / "workspace" / ".git").exists())        # recoverable, workspace included
+        self.assertEqual(len(list((dest / "approvals" / "pending").glob(f"{tid}-*.json"))), 1)
+        self.assertIsNone(orchestrator.load_entry(tid))
+        self.assertNotIn(tid, [e["task_id"] for e in scheduler.entries()])
+        self.assertNotIn(tid, [t["task_id"] for t in dd.overview()["tasks"]])
+        self.assertEqual(approvals.pending(), [])
+        self.assertEqual(orchestrator.next_task_id(), "T-0008")                 # not T-0007 again
+
+    def test_a_running_task_is_not_deleted(self):
+        tid = self.make()
+        with orchestrator._Lock(tid):                                         # a run is processing it
+            code, body = actions.handle_post("/api/task/delete", {"task_id": tid}, self.H)
+        self.assertEqual(code, 409, body)
+        self.assertIsNotNone(orchestrator.load_entry(tid))
+        self.assertTrue((self.home / "tasks" / tid / "state.json").exists() or (self.home / "tasks" / tid).exists())
+        self.assertFalse((self.home / "trash").exists() and any((self.home / "trash").iterdir()))
+
+    def test_only_real_tasks_are_deleted(self):
+        ledger.Ledger("D-0001")                     # a draft session's ledger folder is not a task
+        (self.home / "tasks" / "D-0001").mkdir(parents=True, exist_ok=True)
+        self.assertEqual(actions.handle_post("/api/task/delete", {"task_id": "D-0001"}, self.H)[0], 404)
+        self.assertTrue((self.home / "tasks" / "D-0001").exists())
+        self.assertEqual(actions.handle_post("/api/task/delete", {"task_id": "T-0099"}, self.H)[0], 404)
+        self.assertEqual(actions.handle_post("/api/task/delete", {"task_id": "../x"}, self.H)[0], 400)
+
+    def test_a_task_deleted_between_pick_and_lock_is_skipped_not_a_crash(self):
+        tid = self.make()
+        real = orchestrator.process
+
+        def delete_then_process(task_id, **kw):
+            orchestrator.delete_task(task_id)
+            return real(task_id, **kw)
+        orchestrator.process = delete_then_process
+        try:
+            out = scheduler.run_next(backend=runner.FakeBackend({}), env={}, settings_paths=[])
+        finally:
+            orchestrator.process = real
+        self.assertEqual(out["skipped"], "the task was deleted")
+
+
 class DashboardPageTests(unittest.TestCase):
     def test_the_page_script_parses(self):
         """One syntax error in index.html blanks the WHOLE dashboard (seen while building the assistant UI)."""
