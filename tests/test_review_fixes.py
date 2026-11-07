@@ -126,6 +126,41 @@ class CliBackendHardeningTests(TmpHome):
         a = self.argv("tester")
         self.assertEqual(a[a.index("--tools") + 1], "Read,Bash,Grep,Glob"); self.assertEqual(a[a.index("--allowedTools") + 1], "Read,Bash,Grep,Glob")
 
+    def test_non_ascii_prompts_and_answers_cross_the_cli_pipe_as_utf8(self):
+        """Found live: on Windows the prompt pipe used the locale code page (cp1252). A message with Hebrew or an
+        arrow could not be encoded, the write error was swallowed, and the CLI said it got no input."""
+        text = "שלום, תוסיף כפתור עצירה → ואז המשך — done"
+        body = "\n".join([
+            "import json,os,sys",
+            "raw = sys.stdin.buffer.read().decode('utf-8')",
+            "open(os.environ['STDIN_OUT'],'w',encoding='utf-8').write(raw)",
+            "def out(m):",
+            "    sys.stdout.buffer.write(json.dumps(m, ensure_ascii=False).encode('utf-8') + b'\\n'); sys.stdout.flush()",
+            "out({'type':'system','subtype':'init','apiKeySource':'none'})",
+            "msg = json.loads(raw)['message']",
+            "out({'type':'result','is_error':False,'result':json.dumps({'echo': msg}, ensure_ascii=False),'usage':{}})",
+            ""])
+        env = fake_claude(self.home, body)
+        got = self.home / "stdin.txt"
+        env["STDIN_OUT"] = str(got)
+        r = runner.run_agent("smoke", {"message": text}, task_id="t1", backend=runner.CliBackend(), env=env, settings_paths=[])
+        self.assertTrue(r.ok, r.error)
+        self.assertIn(text, got.read_text(encoding="utf-8"))      # the CLI received it intact
+        self.assertEqual(r.output["echo"], text)                   # and the answer came back intact
+
+    def test_a_prompt_that_cannot_be_sent_is_named_in_the_error(self):
+        """The CLI exits without reading its input: the failed write is reported, not swallowed."""
+        body = "\n".join([
+            "import json,sys",
+            "print(json.dumps({'type':'system','subtype':'init','apiKeySource':'none'}), flush=True)",
+            "sys.exit(1)",
+            ""])
+        env = fake_claude(self.home, body)
+        r = runner.run_agent("smoke", {"message": "x" * 4_000_000}, task_id="t1", backend=runner.CliBackend(),
+                             env=env, settings_paths=[])
+        self.assertFalse(r.ok)
+        self.assertIn("the prompt could not be sent", r.error)
+
     def test_a_wrong_credential_source_stops_the_run_at_init(self):
         """Review finding 1: the credential source used to be checked only after the agent finished."""
         body = ("import json,sys,time\nsys.stdin.read()\n"

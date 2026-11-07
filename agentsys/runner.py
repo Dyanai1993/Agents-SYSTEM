@@ -253,8 +253,11 @@ class CliBackend:
         err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         p = job = timer = None
         try:
-            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True, cwd=cwd, env=env,
-                                 start_new_session=(os.name != "nt"))
+            # UTF-8 both ways, never the Windows code page: with text=True alone the prompt was encoded as cp1252, so a
+            # Hebrew message (or an arrow in a pasted spec) could not be written at all, and UTF-8 output was misread.
+            # Found live (first Requirements Assistant session).
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err_file, text=True,
+                                 encoding="utf-8", errors="replace", cwd=cwd, env=env, start_new_session=(os.name != "nt"))
             job = _create_job_for(p.pid) if os.name == "nt" else None  # assigned ASAP: see _create_job_for's docstring
             timed_out = threading.Event()
 
@@ -264,13 +267,19 @@ class CliBackend:
             timer = threading.Timer(limits.timeout_s, kill_on_timeout)
             timer.start()
 
+            feed_error = []
+
             def feed():
                 try:
                     p.stdin.write(prompt)
+                except (OSError, ValueError) as e:      # recorded, not swallowed: it explains a CLI that got no input
+                    feed_error.append(f"{type(e).__name__}: {e}")
+                try:
                     p.stdin.close()
                 except (OSError, ValueError):
                     pass
-            threading.Thread(target=feed, daemon=True).start()
+            feeder = threading.Thread(target=feed, daemon=True)
+            feeder.start()
         except Exception:
             if timer is not None:
                 timer.cancel()
@@ -346,8 +355,9 @@ class CliBackend:
         if (result is None or result.get("is_error")) and looks_like_limit(blob):
             raise UsageLimitReached(blob[:300])
         if result is None or result.get("is_error"):
-            return AgentResult(role=role, ok=False, backend=self.name, init=init, duration_s=time.time() - t0,
-                               error=(stderr or str(result))[:300])
+            feeder.join(timeout=2)                      # a write that failed when the CLI exited: let it be recorded
+            why = (f"the prompt could not be sent ({feed_error[0]}); " if feed_error else "") + (stderr or str(result))
+            return AgentResult(role=role, ok=False, backend=self.name, init=init, duration_s=time.time() - t0, error=why[:300])
         u = result.get("usage") or {}
         return AgentResult(role=role, ok=True, text=result.get("result", ""), backend=self.name, init=init, tool_log=tool_log,
                            api_key_source=(init or {}).get("apiKeySource"), duration_s=time.time() - t0,
