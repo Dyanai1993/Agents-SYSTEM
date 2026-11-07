@@ -95,7 +95,7 @@ The Approvals list shows only the latest request per task and gate (an older one
 ```
  dashboard "New task"  --writes-->  drafts/D-####/session.json  (draft, revision, conversation, turn state)
    message = one turn request (status pending)          hand edit = revision+1 (refused if stale)
- orch.py assistant / run-next  --> assistant.process_next_turn() --> runner.run_agent("assistant", Haiku, no tools)
+ orch.py assistant / run-next  --> assistant.process_next_turn() --> runner.run_agent("assistant", Sonnet, no tools)
    result applied only if the draft is still at the revision the turn started from; else kept, marked not applied
    failure (invalid output, usage limit, backend error) -> turn "failed", draft untouched, explicit Retry only
  "Approve and submit" (human) --> assistant.submit(revision): readiness (requirements schema + no blocking question)
@@ -148,3 +148,17 @@ The Approvals list shows only the latest request per task and gate (an older one
   `project_base` records repo, ref and sha. The agents never touch the repository itself.
 - Delivery creates `agentsys/<task>` in the repository from `project_base.sha`, so the patches (only the task's own
   commits) apply even if the repository moved on. Nothing is merged or pushed.
+
+## Output quality (2026-11-07, the owner's decision)
+Seen live: T-0026 passed every check, yet the app was bare (App.tsx 39 lines, app.css 25 lines, browser defaults),
+because the prompts rewarded the minimum that passes ("choose the simplest design", "keep changes small") and the
+requirements had no quality criteria. Changed, with no extra calls per task:
+- Architect: plan a complete, production-quality result within scope; for anything a person sees, a coherent visual
+  design (tokens, layout, responsive, interaction states) with checkable UI criteria; a few substantial items
+  instead of many tiny ones.
+- Developer: finish each item to production quality (errors, empty/edge cases, no stubs); for UI, polished design
+  using the project's tokens. Passing the criteria is the floor, not the goal.
+- Requirements Assistant: Sonnet instead of Haiku; proposes checkable quality criteria (visual, robustness,
+  accessibility) for anything a person will use.
+Not yet measured: no eval run (it costs quota). The next live task is the first evidence. Further levers, not taken
+yet: a visual review gate with screenshots, Opus for Architect/Developer, a larger budget per task.

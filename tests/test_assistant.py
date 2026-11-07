@@ -41,7 +41,7 @@ class AssistantTests(TmpHome):
                                                    unknowns=[{"question": q, "blocking": True}],
                                                    suggestions=["Restart the sentence (proposal - not confirmed)"])})
         self.assertEqual(work(fb)["status"], "done")
-        self.assertEqual([c["role"] for c in fb.calls], ["assistant"]); self.assertEqual(fb.calls[0]["model"], "haiku")
+        self.assertEqual([c["role"] for c in fb.calls], ["assistant"]); self.assertEqual(fb.calls[0]["model"], "sonnet")
         v = dd.assistant_view(sid)                                                         # "reopening": a fresh read from disk
         self.assertEqual(v["draft"]["constraints"], ["The learner is a complete beginner"])
         self.assertEqual(v["conversation"][-1]["text"], q); self.assertEqual(v["revision"], 1)

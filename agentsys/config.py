@@ -28,7 +28,8 @@ MODELS = {"haiku": "haiku", "sonnet": "sonnet", "opus": "opus"}
 # Role -> default model, tools, output schema. Agent prompts arrive in Phase 2.
 ROLES = {
     "orchestrator": {"model": "haiku", "tools": [], "schema": "requirements"},
-    "assistant": {"model": "haiku", "tools": [], "schema": "assistant_turn"},     # Requirements Assistant: talks, drafts, never submits
+    "assistant": {"model": "sonnet", "tools": [], "schema": "assistant_turn"},    # Requirements Assistant: talks, drafts, never submits.
+    # Sonnet, not Haiku: the quality bar of every task starts in its requirement (the owner's call, 2026-11-07)
     "architect": {"model": "sonnet", "tools": ["Read", "Grep", "Glob"], "schema": "plan"},
     "developer": {"model": "sonnet", "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"], "schema": "dev_report"},
     "tester": {"model": "sonnet", "tools": ["Read", "Bash", "Grep", "Glob"], "schema": "test_report"},
