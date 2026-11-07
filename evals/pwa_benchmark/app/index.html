@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מילים ראשונות - גרסה {{VERSION}}</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body data-version="{{VERSION}}">
+<header class="bar">
+  <h1>מילים ראשונות</h1>
+  <span class="ver" id="ver">גרסה {{VERSION}}</span>
+  <button id="theme" type="button" aria-pressed="false">מצב כהה</button>
+</header>
+<main class="wrap">
+  <section class="card hero" aria-labelledby="start-h">
+    <h2 id="start-h">מתחילים כאן</h2>
+    <p class="lead">מורידים את השיעורים פעם אחת - ואז אפשר ללמוד גם בלי אינטרנט.</p>
+    <button id="download" type="button" class="primary">הורדה לשימוש ללא חיבור</button>
+    <div id="progress" role="progressbar" tabindex="-1" aria-label="התקדמות ההורדה" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><i></i></div>
+    <p id="status" role="status" tabindex="-1"></p>
+    <button id="retry" type="button" hidden>נסו שוב</button>
+  </section>
+  <section class="card" aria-labelledby="sample-h">
+    <h2 id="sample-h">דוגמה מהשיעור הראשון</h2>
+    <p><span class="tile" lang="en" dir="ltr">apple</span> <span>תפוח</span></p>
+  </section>
+  <section class="card secondary" aria-labelledby="set-h">
+    <h2 id="set-h">הגדרות</h2>
+    <button id="update" type="button">בדיקת עדכון</button>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -58,7 +58,7 @@ fixtures; FakeBackend proves wiring, not model quality; any live comparison need
       FINAL); playbooks in the review document and the build id. Verified on real role payloads incl. FINAL.
 - [x] Phase 2 - tester evidence: an unrelated command, a grep of a test name or an aggregate count cannot prove a
       separate criterion; expected-failure and batched checks with distinct output still pass.
-- [ ] Phase 3 - PWA benchmark fixtures + browser checks: broken B while A is verified; corrupt asset while the
+- [x] Phase 3 - PWA benchmark fixtures + browser checks: broken B while A is verified; corrupt asset while the
       manifest says A; ready marker with a missing cache; real keyboard download / failure / retry / theme + focus.
 - [ ] Phase 4 - a quality check that separates a bare shell from one meeting the first-use criteria; false-pass cases.
 - [ ] Phase 5 - a short FirstWords follow-up proposal (offline recovery, shell polish), for separate approval.

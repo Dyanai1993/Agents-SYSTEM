@@ -20,3 +20,5 @@ state/workers/
 requests/
 trash/
 drafts/
+evals/pwa_benchmark/node_modules/
+evals/pwa_benchmark/results/

@@ -1,0 +1,12 @@
+{
+  "name": "agentsys-pwa-benchmark",
+  "private": true,
+  "type": "module",
+  "description": "PWA reliability benchmark: the same browser checks against a reference and a deliberately broken implementation (T-0026's flaws).",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.0"
+  }
+}
