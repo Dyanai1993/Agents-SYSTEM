@@ -302,6 +302,39 @@ class RequirementEditTests(WorkerBase):
             self.assertEqual(actions.handle_post("/api/task/requirement", {"task_id": "T-0001", "requirement": REQ}, H)[0], 409)
 
 
+class LiveViewTests(WorkerBase):
+    def test_a_run_leaves_live_lines_the_task_monitor_shows(self):
+        orchestrator.submit("T-0001", requirements=REQ)
+        worker.request_run("T-0001")
+        self.step(fb(developer=self.dev("T-0001")))
+        live = dd.task_detail("T-0001")["live"]
+        kinds = [(x["agent"], x["kind"]) for x in live]
+        self.assertIn(("architect", "start"), kinds); self.assertIn(("developer", "end"), kinds)
+        self.assertIn(("tester", "tool"), kinds)                       # the tester's command, as it ran
+        self.assertTrue(all("ts" in x for x in live))
+
+    def test_live_lines_never_carry_a_secret_or_raw_output(self):
+        from agentsys import runner
+        got = []
+        runner._report_progress(got.append, {"type": "tool_use", "name": "Bash", "input": {"command": "curl -H 'api_key: abc123secret' x"}})
+        runner._report_progress(got.append, {"type": "tool_result", "content": "line one sk-ABCDEFGH12345678\nline two", "is_error": False})
+        runner._report_progress(lambda e: 1 / 0, {"type": "text", "text": "a broken callback never breaks the run"})
+        self.assertNotIn("abc123secret", json.dumps(got)); self.assertNotIn("sk-ABCDEFGH12345678", json.dumps(got))
+        self.assertEqual(got[1]["text"], "line one [REDACTED]")                 # first line only
+
+    def test_the_live_file_stays_small(self):
+        from agentsys import logger
+        old = logger.LIVE_MAX_BYTES
+        logger.LIVE_MAX_BYTES = 2000
+        try:
+            for i in range(200):
+                logger.live("T-0009", "developer", {"kind": "say", "text": f"line {i} " + "x" * 40})
+            self.assertLess((self.home / "tasks/T-0009/live.jsonl").stat().st_size, 4000)
+            self.assertIn("line 199", logger.live_tail("T-0009")[-1]["text"])
+        finally:
+            logger.LIVE_MAX_BYTES = old
+
+
 class BlockerConsistencyTests(WorkerBase):
     def test_run_blocker_agrees_with_the_scheduler(self):
         orchestrator.submit("T-0001", requirements=REQ)

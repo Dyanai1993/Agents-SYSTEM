@@ -31,6 +31,14 @@ FakeBackend (zero quota), a commit and a push. Live subscription checks only wit
       approved commit; delivery receipt (patch names, folder, branch).
 
 ## Phase C - robustness and UI
+Done early, from live use (2026-11-07):
+- [x] A button never fails silently when the server does not answer (post() returns every failure as an error).
+- [x] One style for buttons (primary / normal / danger, hover, pressed, focus) and dropdowns (own arrow, dark popups).
+- [x] Visual state: a pipeline (Plan -> items -> final regression -> security -> review -> delivered, the running
+      step pulses) and a live terminal of what the agents do (tasks/<id>/live.jsonl, streamed by the runner).
+- [x] Narrow a stuck task's requirement in place; a note with Retry; "narrow it" when the plan cannot cover the criteria.
+- [x] The tester gets one redo when its report breaks the evidence/format rules (instead of blocking the task).
+Still open:
 - [ ] Non-overlapping refresh; discard obsolete fetches when the selection changes; actions bound to the
       rendered task/draft; lost-response handling (reconcile before offering to repeat).
 - [ ] Actionable errors first, technical details folded.

@@ -8,7 +8,8 @@
 header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg)}
 header h1{font-size:17px;margin:0 12px 0 0}
 nav button{background:none;border:1px solid var(--line);color:var(--fg);padding:5px 12px;border-radius:99px;cursor:pointer;margin-right:4px}
-nav button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+nav button.on{background:var(--acc);color:var(--onacc);border-color:var(--acc)}
+nav button:hover:not(.on){border-color:var(--acc);background:color-mix(in srgb,var(--acc) 9%,var(--bg))}
 main{padding:16px;max-width:1200px;margin:auto}
 .card{background:var(--card);border-radius:10px;padding:12px;margin-bottom:12px;overflow-x:auto}
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -17,14 +18,54 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc)}
 input,select,textarea{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px}
 textarea:disabled{opacity:.7}
+/* Controls: one look for every button and dropdown (they were browser defaults). :where() keeps the generic states at
+   the lowest specificity, so a button with its own class (nav, chip, send, primary, danger) always wins. */
+:root{color-scheme:light dark}
+button{font:inherit;font-size:14px;line-height:1.25;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;
+  padding:7px 14px;cursor:pointer;transition:background-color .15s,border-color .15s,box-shadow .15s}
+button:where(:hover:not(:disabled)){border-color:var(--acc);background:color-mix(in srgb,var(--acc) 9%,var(--bg))}
+button:where(:active:not(:disabled)){transform:translateY(1px)}
+button:where(:disabled){opacity:.45;cursor:default}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 50%,var(--line))}
+button.danger:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 12%,var(--bg));border-color:var(--bad)}
+button.danger.solid{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:600}
+button.small{padding:4px 10px;font-size:13px}
+select{appearance:none;-webkit-appearance:none;font:inherit;font-size:14px;color:var(--fg);background-color:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:8px 38px 8px 12px;cursor:pointer;max-width:100%;transition:border-color .15s;
+  background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
+  background-position:calc(100% - 21px) 55%,calc(100% - 15px) 55%;background-size:6px 6px,6px 6px;background-repeat:no-repeat}
+select:hover{border-color:var(--acc)}
+select.picker{width:min(100%,560px)}
+input:focus,textarea:focus,select:focus{border-color:var(--acc)}
 .msg{border-left:3px solid var(--acc);padding:6px 10px;margin:6px 0;background:var(--card);border-radius:0 8px 8px 0}
 .msg.err{border-color:var(--bad)}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:6px 0 0}
 details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
 [hidden]{display:none!important}.small{font-size:12px}
 .wbar{flex-basis:100%;display:flex;gap:8px;align-items:center;font-size:13px}.wbar i{width:9px;height:9px;border-radius:50%;flex:none;background:var(--mut)}
 .wbar.ok i{background:var(--ok)}.wbar.warn i{background:var(--warn)}.wbar.bad i{background:var(--bad)}.wbar.bad span{color:var(--bad)}
-button.primary{background:var(--acc);color:var(--onacc);border:1px solid var(--acc);border-radius:8px;padding:6px 16px;cursor:pointer;font:inherit}
+button.primary{background:var(--acc);color:var(--onacc);border-color:var(--acc);font-weight:600}
+button.primary:hover:not(:disabled){background:color-mix(in srgb,var(--acc) 82%,var(--fg));border-color:color-mix(in srgb,var(--acc) 82%,var(--fg))}
 button.primary:disabled{opacity:.45;cursor:default}
+/* Pipeline: where the task stands, one node per step */
+.pipe{display:flex;flex-wrap:wrap;align-items:center;gap:6px 0;margin-top:8px}
+.node{display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:99px;border:1px solid var(--line);background:var(--bg);font-size:13px;white-space:nowrap}
+.node i{width:9px;height:9px;border-radius:50%;background:var(--line);flex:none}
+.node.done{border-color:color-mix(in srgb,var(--ok) 45%,var(--line))}.node.done i{background:var(--ok)}
+.node.now{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 12%,var(--bg));font-weight:600}.node.now i{background:var(--acc)}
+.node.now.live i{animation:pulse 1.4s ease-in-out infinite}
+.node.fail{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,var(--bg))}.node.fail i{background:var(--bad)}
+.node small{font-weight:400;color:var(--mut)}
+.link{width:16px;height:2px;background:var(--line);flex:none}.link.done{background:color-mix(in srgb,var(--ok) 60%,var(--line))}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--acc) 70%,transparent)}50%{box-shadow:0 0 0 6px transparent}}
+@media (prefers-reduced-motion:reduce){.node.now.live i{animation:none}}
+/* Live terminal: always dark, like a terminal */
+.term{background:#0b0f17;color:#d6deeb;border-radius:10px;padding:10px 12px;font:12.5px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;
+  max-height:46vh;min-height:120px;overflow:auto;margin-top:8px;border:1px solid #1f2937}
+.term div{white-space:pre-wrap;overflow-wrap:anywhere}.term .t{color:#64748b}.term .ag{color:#67e8f9}.term .tool{color:#fbbf24}
+.term .ok{color:#4ade80}.term .bad{color:#f87171}.term .say{color:#94a3b8}.term .end{color:#a5b4fc}
+.livechip{display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-left:8px;color:var(--mut)}
+.livechip i{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 1.4s ease-in-out infinite}
 pre.diff{max-height:60vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;white-space:pre;word-break:normal}
 pre.diff .add{color:var(--ok)}pre.diff .del{color:var(--bad)}pre.diff .hunk{color:var(--acc)}pre.diff .file{font-weight:700}
 code{font-size:12px;overflow-wrap:anywhere}
@@ -133,9 +174,9 @@ async function assistantView(auto){
   const fs=saveFocus();
   m.replaceChildren();
   const top=el("div",{class:"card","data-view":"assistant"},el("b",{},"Requirements Assistant"),el("span",{class:"mut"},"  describe what you want; the assistant asks what it needs and keeps the draft. Nothing is queued until you approve it."));
-  const nb=el("button",{style:"margin:6px 6px 0 0"},"Start a new request");nb.onclick=startDraft;top.append(el("div",{},nb));
+  const nb=el("button",{class:"primary",style:"margin:8px 6px 0 0"},"Start a new request");nb.onclick=startDraft;top.append(el("div",{},nb));
   const open=ss.sessions.filter(s=>s.status!=="submitted");
-  if(ss.sessions.length){const sel=el("select",{style:"margin-top:6px"});sel.append(el("option",{value:""},"Your drafts ("+open.length+" open)..."));
+  if(ss.sessions.length){const sel=el("select",{class:"picker","aria-label":"Your drafts",style:"margin-top:8px;display:block"});sel.append(el("option",{value:""},"Your drafts ("+open.length+" open)..."));
     ss.sessions.slice().reverse().forEach(s=>{const o=el("option",{value:s.id},s.id+" - "+s.title.slice(0,60)+" ["+s.status+(s.task_id?" "+s.task_id:"")+"]");if(s.id===curDraft)o.selected=true;sel.append(o);});
     sel.onchange=()=>{if(sel.value)openDraft(sel.value);};top.append(sel);}
   m.append(top);
@@ -200,8 +241,8 @@ async function assistantView(auto){
     rd.append(el("div",{class:"bad",style:"margin:6px 0"},(turn.status==="failed"?"Your last message failed and is NOT in this draft. Press Retry first":"Your last message is not answered yet, so it is NOT in this draft. Wait for the reply first")+
       " if it matters - submitting now hands the agents the draft exactly as shown."));
   else if(dirty.length)rd.append(el("div",{class:"warn"},"Save your edits before submitting."));
-  else if(!reviewOpen[sid]){const rv=el("button",{},"Review and submit");rv.onclick=()=>{reviewOpen[sid]=v.revision;tick();};rd.append(el("div",{class:"ok"},"Ready to submit."),rv);}
-  else{const d=v.draft,ok=el("button",{style:"margin:6px 6px 0 0"},"Approve and submit revision "+v.revision),cancel=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
+  else if(!reviewOpen[sid]){const rv=el("button",{class:"primary",style:"margin-top:6px"},"Review and submit");rv.onclick=()=>{reviewOpen[sid]=v.revision;tick();};rd.append(el("div",{class:"ok"},"Ready to submit."),rv);}
+  else{const d=v.draft,ok=el("button",{class:"primary",style:"margin:6px 6px 0 0"},"Approve and submit revision "+v.revision),cancel=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
     const exact=el("div",{class:"msg",dir:"auto"},el("b",{},"This exact requirement is handed to the agents (revision "+v.revision+"):"),el("div",{style:"margin-top:4px"},el("b",{},"Goal: "),d.goal),
       list("Acceptance criteria",d.acceptance_criteria),list("Constraints",d.constraints),list("Assumptions",d.risks),list("Open questions (none blocking)",d.unknowns.map(u=>u.question)));
     if(reviewOpen[sid]!==v.revision){ok.disabled=true;exact.append(el("div",{class:"warn"},"The draft changed since you opened this review: review it again."));}
@@ -237,7 +278,7 @@ function requirementCard(t){
 async function overview(){
   const o=await get("/api/overview"),w=o.window,ss=await get("/api/assistant/sessions");m.replaceChildren();
   const nt=el("div",{class:"card"},el("b",{},"New task"),el("span",{class:"mut"},"  talk it through with the Requirements Assistant; nothing is queued until you approve the draft"));
-  const nb=el("button",{style:"margin:6px 6px 0 0"},"Start a new request");nb.onclick=startDraft;nt.append(el("div",{},nb));
+  const nb=el("button",{class:"primary",style:"margin:8px 6px 0 0"},"Start a new request");nb.onclick=startDraft;nt.append(el("div",{},nb));
   ss.sessions.filter(s=>s.status!=="submitted").forEach(s=>{const a=el("div",{class:"alert",style:"cursor:pointer;border-color:"+(s.status==="assistant turn failed"?"var(--bad)":"var(--warn)")},el("b",{},s.id)," — ",el("span",{dir:"auto"},s.title)," ["+s.status+"]");a.onclick=()=>openDraft(s.id);nt.append(a);});
   m.append(nt);
   if(o.bad_lines)m.append(el("div",{class:"card bad"},"Warning: "+o.bad_lines+" unreadable log lines skipped."));
@@ -285,6 +326,45 @@ async function messages(){
   document.getElementById("list").replaceChildren(box.children.length?box:el("div",{class:"card"},"No messages."));
 }
 let curTask="",delAsk=null,taskNote=null;
+// Pipeline: Plan -> each work item (build, test) -> final regression -> security -> review -> delivered. The step that is
+// running pulses; a step where the task stopped is red. Built from the plan, progress.json and the live heartbeat.
+function pipelineCard(t){
+  const c=el("div",{class:"card"},el("b",{},"Where it stands")),r=t.run||{},st=r.status,state=t.state.state,running=!!r.running;
+  const blocked=["blocked","needs_input","paused","stopped"].includes(st)||["blocked","failed","paused"].includes(state);
+  const nodes=[],planned=t.plan&&t.plan.status==="ok",items=t.work.items,steps=t.work.steps;
+  const cls=(done,now)=>done?"done":now?(blocked?"fail":"now"+(running?" live":"")):"";
+  nodes.push({label:"Plan",c:cls(planned,!planned&&["intake","plan"].includes(state)||!planned&&blocked)});
+  items.forEach(w=>{const now=w.status.startsWith("in progress")||w.status.startsWith("stopped");
+    nodes.push({label:w.id,sub:now?w.status.replace(/^(in progress: |stopped at )/,""):"",title:w.title,c:cls(w.status==="done",now)});});
+  steps.forEach(s=>nodes.push({label:s.id==="FINAL"?"Final regression":"Security",c:cls(s.status==="done",s.status==="next"&&(state==="test"||state==="security"||blocked)&&items.every(w=>w.status==="done"))}));
+  const reviewDone=st==="done"||st==="rejected",inReview=st==="waiting_approval"&&!t.requirement?.phase;
+  nodes.push({label:"Review",c:reviewDone?"done":inReview?"now":""});
+  nodes.push({label:st==="rejected"?"Rejected":"Delivered",c:st==="done"?"done":st==="rejected"?"fail":""});
+  const pipe=el("div",{class:"pipe",role:"list"});
+  nodes.forEach((n,i)=>{if(i)pipe.append(el("span",{class:"link"+(n.c==="done"||nodes[i-1].c==="done"&&n.c?" done":""),"aria-hidden":"true"}));
+    pipe.append(el("span",{class:"node "+n.c,role:"listitem",title:n.title||n.label},el("i",{"aria-hidden":"true"}),n.label,n.sub?el("small",{}," "+n.sub):""));});
+  c.append(pipe);
+  if(!planned&&!items.length)c.append(el("div",{class:"mut small",style:"margin-top:6px"},"The work items appear here once the Architect's plan is accepted."));
+  return c;}
+// Live terminal: what the agents are doing, line by line, while the call runs (tasks/<id>/live.jsonl, written by the runner).
+function liveCard(t){
+  const lines=t.live||[],r=t.run||{};if(!lines.length&&!r.running)return null;
+  const p=liveJob(t.task_id),c=el("div",{class:"card"},el("b",{},"Live activity"));
+  if(p)c.append(el("span",{class:"livechip"},el("i",{"aria-hidden":"true"}),(p.job.agent||"working")+" - ",el("span",{"data-since":p.job.since},dur(Date.now()/1000-p.job.since))));
+  else if(lines.length)c.append(el("span",{class:"livechip",style:"color:var(--mut)"},"not running - last line "+ago((Date.now()-new Date(lines[lines.length-1].ts))/60000)));
+  const term=el("div",{class:"term",role:"log","aria-live":"polite","aria-label":"Live agent activity","data-task":t.task_id,"data-n":String(lines.length)+(lines.length?lines[lines.length-1].ts:"")});
+  const tm=ts=>{const d=new Date(ts);return isNaN(d)?"":d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"});};
+  const icon={Bash:"$",Edit:"✎",Write:"✎",Read:"›",Grep:"⌕",Glob:"⌕"};
+  lines.forEach(x=>{const row=el("div",{},el("span",{class:"t"},tm(x.ts)+"  "));
+    if(x.kind==="start")row.append(el("span",{class:"ag"},"▶ "+x.agent+" started"),el("span",{class:"t"}," ("+(x.model||"")+")"));
+    else if(x.kind==="end")row.append(el("span",{class:x.ok?"end":"bad"},(x.ok?"■ ":"✖ ")+x.agent+(x.ok?" finished":" failed")+(x.seconds?" in "+dur(x.seconds):"")+(x.error?": "+x.error:"")));
+    else if(x.kind==="tool")row.append("  ",el("span",{class:"tool"},(icon[x.tool]||"•")+" "+x.tool+" "),x.detail||"");
+    else if(x.kind==="result")row.append("    ",el("span",{class:x.ok?"ok":"bad"},x.ok?"✔ ":"✖ "),el("span",{class:"t"},x.text||""));
+    else if(x.kind==="say")row.append("  ",el("span",{class:"say",dir:"auto"},x.text||""));
+    term.append(row);});
+  if(!lines.length)term.append(el("div",{class:"t"},"Waiting for the first agent step..."));
+  c.append(term,el("div",{class:"mut small",style:"margin-top:4px"},"Commands and files the agents use, as they happen. Tool output is not shown here (only ok / error); the full log is in the Activity tab."));
+  return c;}
 // The run card: what is happening right now and the ONE next action (Start / Continue / Resume / Retry / Answer /
 // Approvals). Every action only writes a request file; the worker does the work. The dashboard never calls a model.
 function runCard(t,hasReview){
@@ -415,20 +495,18 @@ async function task(){
   const wantsReview=t&&!t.error&&(t.state.state==="review"||(t.run&&["waiting_approval","done","rejected"].includes(t.run.status)));
   const rv=wantsReview?await get("/api/review?id="+encodeURIComponent(curTask)):null;
   const fs=saveFocus();   // the answer box keeps your typing, focus and cursor across the refresh
+  const oldTerm=m.querySelector(".term"),termPrev=oldTerm&&oldTerm.dataset.task===curTask?{top:oldTerm.scrollTop,n:oldTerm.dataset.n,bottom:oldTerm.scrollHeight-oldTerm.scrollTop-oldTerm.clientHeight<40}:null;
   m.replaceChildren();
-  const sel=el("select",{style:"max-width:100%"});o.tasks.slice().reverse().forEach(x=>{const op=el("option",{value:x.task_id},x.task_id+" ["+(x.waiting_approval?"waiting for you":x.state)+"] "+x.title);if(x.task_id===curTask)op.selected=true;sel.append(op);});
+  const sel=el("select",{class:"picker","aria-label":"Task"});o.tasks.slice().reverse().forEach(x=>{const op=el("option",{value:x.task_id},x.task_id+" ["+(x.waiting_approval?"waiting for you":x.state)+"] "+x.title);if(x.task_id===curTask)op.selected=true;sel.append(op);});
   sel.onchange=()=>{curTask=sel.value;delAsk=null;taskNote=null;tick();};
   const head=el("div",{class:"card"},el("b",{},"Task "),sel);if(taskNote)head.append(el("div",{class:taskNote.cls,style:"margin-top:6px"},taskNote.text));m.append(head);
   if(!t||t.error){m.append(el("div",{class:"card"},curTask?"Task not found.":"No tasks yet."));return;}
   const cur=t.state.state||"",b=t.budget;
-  const flow=el("div",{class:"card"});
-  t.states.forEach((s,i)=>{const p=el("span",{class:"pill",style:"margin-right:4px;"+(s===cur?"background:var(--acc);color:#fff":"")},s);flow.append(p);});
-  if(["blocked","failed","paused"].includes(cur))flow.append(el("span",{class:"pill bad"},cur));
-  if(t.state.waiting_approval)flow.append(el("span",{class:"pill warn"},"waiting for approval"));
+  const flow=pipelineCard(t);
   const ctl=runCard(t,!!(rv&&!rv.error));
   // delete: two steps, recoverable (moved to trash/), refused by the server while a run is processing the task
-  if(delAsk!==curTask){const d=el("button",{style:"margin:6px 0 0 12px;color:var(--bad);border-color:var(--bad)"},"Delete task...");d.onclick=()=>{delAsk=curTask;tick();};ctl.append(d);}
-  else{const id=curTask,yes=el("button",{style:"margin:6px 6px 0 0;color:var(--bad);border-color:var(--bad)"},"Yes, delete "+id),no=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
+  if(delAsk!==curTask){const d=el("button",{class:"danger",style:"margin:6px 0 0 12px"},"Delete task...");d.onclick=()=>{delAsk=curTask;tick();};ctl.append(d);}
+  else{const id=curTask,yes=el("button",{class:"danger solid",style:"margin:6px 6px 0 0"},"Yes, delete "+id),no=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
     yes.onclick=async()=>{yes.disabled=true;const r=await post("/api/task/delete",{task_id:id});delAsk=null;
       if(r.ok){curTask="";taskNote={cls:"ok",text:"Deleted "+id+". It was moved to "+r.body.moved_to+" - move it back to restore it."};}else taskNote={cls:"bad",text:"Not deleted: "+r.body.error};tick();};
     no.onclick=()=>{delAsk=null;tick();};
@@ -437,6 +515,7 @@ async function task(){
   m.append(flow);
   if(t.attention)m.append(el("div",{class:"card alert",style:t.attention.level==="warn"?"border-color:var(--warn)":""},el("b",{},"Needs you: "),t.attention.text));
   m.append(ctl);                    // what is happening and the next action, before the details
+  const lt=liveCard(t);if(lt)m.append(lt);
   if(rv&&!rv.error)m.append(reviewCard(rv));
   m.append(requirementCard(t));
   // plan and dependencies
@@ -474,6 +553,7 @@ async function task(){
   t.events.forEach(e=>tb.append(el("tr",{},el("td",{class:"mut"},e.ts.slice(11,19)),el("td",{},e.agent),el("td",{class:"mut"},e.model),el("td",{},el("span",{class:"pill"},e.event_type)),
     el("td",{},e.summary),el("td",{class:e.status==="error"||e.status==="blocked"?"bad":"ok"},e.status))));
   m.append(el("div",{class:"card"},tb));
+  const nt=m.querySelector(".term");if(nt)nt.scrollTop=!termPrev||termPrev.bottom||termPrev.n!==nt.dataset.n?nt.scrollHeight:termPrev.top;   // follow new lines unless you scrolled up
   restoreFocus(fs);
 }
 async function quality(){
@@ -501,7 +581,7 @@ async function approvals(){
     if(a.gate==="requirements"){const o=el("button",{style:"margin:6px 6px 0 0"},"Open the conversation");o.onclick=()=>openTask(a.task_id);box.append(o);}
     if(a.gate==="merge"){const o=el("button",{class:"primary",style:"margin:6px 6px 0 0"},"Open the review (evidence, security, diff)");o.onclick=()=>openTask(a.task_id);box.append(o,el("div",{class:"mut small"},"Approving here does not start the delivery: press Continue in the Task monitor, or use 'Approve and deliver' in the review."));}
     const note=el("input",{placeholder:"note (optional)"});
-    [["approved","Approve"],["rejected","Reject"]].forEach(([d,l])=>{const b=el("button",{style:"margin:6px 6px 0 0"},l);b.onclick=async()=>{const x=await post("/api/approval/decide",{id:a.id,decision:d,note:note.value});if(!x.ok)alert(x.body.error);tick();};box.append(b);});
+    [["approved","Approve"],["rejected","Reject"]].forEach(([d,l])=>{const b=el("button",{class:d==="approved"?"primary":"",style:"margin:6px 6px 0 0"},l);b.onclick=async()=>{const x=await post("/api/approval/decide",{id:a.id,decision:d,note:note.value});if(!x.ok)alert(x.body.error);tick();};box.append(b);});
     box.append(note);c.append(box);});
   m.append(c);
   const hist=el("table",{},el("tr",{},...["When","Task","Gate","Decision","Note"].map(h=>el("th",{},h))));

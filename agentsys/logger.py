@@ -47,3 +47,36 @@ def log_event(task_id, agent, event_type, summary, *, run_id="r0", model="none",
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
     return event
+
+
+LIVE_MAX_BYTES = 400_000
+
+
+def live(task_id, agent, entry):
+    """One line for the dashboard's live view (tasks/<id>/live.jsonl): what an agent is doing right now. Kept small:
+    when the file passes LIVE_MAX_BYTES only the newest half is kept. Never raises - the live view is a convenience."""
+    try:
+        path = config.home() / "tasks" / safe_task_id(task_id) / "live.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(dict(entry, ts=now(), agent=agent), ensure_ascii=False) + "\n")
+        if path.stat().st_size > LIVE_MAX_BYTES:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            path.write_text("\n".join(lines[len(lines) // 2:]) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def live_tail(task_id, n=150):
+    try:
+        path = config.home() / "tasks" / safe_task_id(task_id) / "live.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines()[-n:]
+    except (OSError, ValueError):
+        return []
+    out = []
+    for ln in lines:
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            continue
+    return out

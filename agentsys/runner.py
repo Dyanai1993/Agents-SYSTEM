@@ -96,6 +96,39 @@ def extract_json(text: str):
 _DEFAULT_FAKE_RESPONSE = {"security": {"verdict": "pass", "summary": "no findings", "findings": []}}
 
 
+_SECRET_RE = re.compile(r"(sk-[A-Za-z0-9_-]{8,}|(?i:(?:api[_-]?key|token|secret|password|passwd)\s*[:=]\s*)\S+)")
+
+
+def _mask(s, n):
+    s = " ".join(str(s or "").split())
+    s = _SECRET_RE.sub("[REDACTED]", s)
+    return s if len(s) <= n else s[:n] + "..."
+
+
+def _report_progress(cb, blk):
+    """One compact live line per streamed step, for the dashboard's live view: what the agent says it is doing, which
+    tool it runs on what (a command, a file), and whether a tool result was ok - never the raw tool output (one masked
+    line at most). A broken callback never breaks the run."""
+    if cb is None or not isinstance(blk, dict):
+        return
+    try:
+        kind = blk.get("type")
+        if kind == "text" and str(blk.get("text", "")).strip():
+            cb({"kind": "say", "text": _mask(blk.get("text"), 240)})
+        elif kind == "tool_use":
+            i = blk.get("input") or {}
+            detail = i.get("command") or i.get("file_path") or i.get("path") or i.get("pattern") or i.get("url") or ""
+            cb({"kind": "tool", "tool": str(blk.get("name") or "?"), "detail": _mask(detail, 240)})
+        elif kind == "tool_result":
+            out = blk.get("content")
+            if isinstance(out, list):
+                out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
+            first = next((ln for ln in str(out or "").splitlines() if ln.strip()), "")
+            cb({"kind": "result", "ok": not blk.get("is_error"), "text": _mask(first, 140)})
+    except Exception:
+        pass
+
+
 class FakeBackend:
     """responses: role -> dict | str | Exception | callable(prompt)->dict|str."""
     name = "fake"
@@ -106,7 +139,7 @@ class FakeBackend:
         self.api_key_source = api_key_source
         self.calls = []
 
-    def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
+    def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env, on_progress=None):
         self.calls.append({"role": role, "prompt": prompt, "model": model})
         r = self.responses.get(role, _DEFAULT_FAKE_RESPONSE.get(role, {}))
         if isinstance(r, list):          # scripted sequence: the last item repeats
@@ -123,6 +156,8 @@ class FakeBackend:
                   for c in r.get("checks", []) if c.get("command")]
         else:
             tl = []
+        for c in tl:
+            _report_progress(on_progress, {"type": "tool_use", "name": c.get("tool"), "input": {"command": c.get("command", "")}})
         return AgentResult(tool_log=tl, role=role, ok=True, text=text, backend=self.name, api_key_source=self.api_key_source,
                            usage={"input_tokens": len(prompt) // 4, "output_tokens": len(text) // 4, "turns": 1},
                            init={"apiKeySource": self.api_key_source})
@@ -230,7 +265,7 @@ class CliBackend:
     def __init__(self, binary="claude"):
         self.binary = binary
 
-    def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
+    def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env, on_progress=None):
         exe = shutil.which(self.binary, path=(env or os.environ).get("PATH"))
         if not exe:
             return AgentResult(role=role, ok=False, backend=self.name, error=f"'{self.binary}' not found on PATH")
@@ -326,6 +361,7 @@ class CliBackend:
                             if isinstance(out, list):
                                 out = " ".join(b.get("text", "") for b in out if isinstance(b, dict))
                             outputs[blk.get("tool_use_id")] = (_cap_output(out), bool(blk.get("is_error")))
+                        _report_progress(on_progress, blk)
             p.wait()
         finally:
             timer.cancel()
@@ -390,7 +426,7 @@ class SdkBackend:
     point uses it by default (see get_backend()); do not use it for a real task."""
     name = "sdk"
 
-    def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env):
+    def run(self, *, role, prompt, model, limits, system_prompt, tools, cwd, env, on_progress=None):
         import asyncio
         try:
             import claude_agent_sdk as sdk
@@ -459,6 +495,16 @@ def get_backend(name=None):
 
 
 # ---------------------------------------------------------------- the interface
+def _accepts(fn, name):
+    """True if `fn` takes the keyword `name` (or **kwargs): test doubles with the older run() signature still work."""
+    import inspect
+    try:
+        ps = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in ps or any(p.kind == p.VAR_KEYWORD for p in ps.values())
+
+
 def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", backend=None, cwd=None,
               env=None, settings_paths=None, system_prompt=None, post_process=None) -> AgentResult:
     """Guard -> budget check -> backend -> init check -> ledger -> schema check -> log. Sequential, no retries."""
@@ -486,9 +532,16 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
     log = lambda et, summary, **kw: logger.log_event(task_id, role, et, summary, run_id=run_id, model=model, **kw)
     log("agent_start", f"{role} starts on {model} via {backend.name}", from_="orchestrator", to=role, payload={"input": input})
     try:
+        kw = {}
+        if _accepts(backend.run, "on_progress"):            # live view: what the agent is doing while the call runs
+            kw["on_progress"] = lambda entry: logger.live(task_id, role, entry)
+        logger.live(task_id, role, {"kind": "start", "model": model})
         res = backend.run(role=role, prompt=prompt, model=model, limits=limits, system_prompt=system_prompt,
-                          tools=spec["tools"], cwd=cwd, env=env)
+                          tools=spec["tools"], cwd=cwd, env=env, **kw)
+        logger.live(task_id, role, {"kind": "end", "ok": bool(res.ok), "seconds": round(res.duration_s or 0, 1),
+                                    "error": (res.error or "")[:160]})
     except UsageLimitReached as e:
+        logger.live(task_id, role, {"kind": "end", "ok": False, "error": "usage limit reached: paused"})
         ledger.record_limit_hit(e)
         ckpt = config.home() / "tasks" / task_id / "checkpoint.json"
         ckpt.write_text(json.dumps({"reason": "usage_limit", "role": role, "run_id": run_id, "input": input,

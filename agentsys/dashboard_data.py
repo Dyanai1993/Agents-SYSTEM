@@ -267,7 +267,7 @@ def task_detail(task_id, now=None):
             "security": _json(d / "security_report.json"), "tainted": _json(d / "workspace_tainted.json"),
             "idle_min": None if idle is None else round(idle, 1),
             "attention": None if att is None else {"level": att[0], "text": att[1]},
-            "requirement": requirement_view(task_id), "run": run_view(task_id, live)}
+            "requirement": requirement_view(task_id), "run": run_view(task_id, live), "live": logger.live_tail(task_id, 150)}
 
 
 REVIEW_DIFF_MAX = 300_000          # characters of diff shown; the patch files always hold all of it
