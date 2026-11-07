@@ -54,12 +54,14 @@
           "category": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 100,
             "pattern": "\\S",
             "description": "e.g. command injection, prompt injection, secret leak, path traversal, unsafe deserialization, permission leak"
           },
           "file": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 300,
             "pattern": "\\S",
             "description": "Path relative to the workspace root"
           },

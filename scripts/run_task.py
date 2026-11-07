@@ -14,7 +14,7 @@ ap.add_argument("task_id")
 ap.add_argument("--goal", required=True)
 ap.add_argument("--criteria", action="append", required=True, help="acceptance criterion (repeatable)")
 ap.add_argument("--constraint", action="append", default=[])
-ap.add_argument("--backend", default="cli", choices=["cli"])   # sdk builds no tool log: see loop.refuse_unverifiable_backend
+ap.add_argument("--backend", default="cli", choices=["cli"])   # sdk builds no tool log: see loop.resolve_backend
 a = ap.parse_args()
 try:
     billing_guard.run_guard()

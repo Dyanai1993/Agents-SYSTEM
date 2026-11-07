@@ -122,7 +122,7 @@ class OrchestratorTests(TmpHome):
         tdir = self.home / "tasks/t1"; tdir.mkdir(parents=True)
         findings = [{"severity": "low", "category": "c", "file": "a.py", "description": "x" * 500, "evidence": "e"} for _ in range(12)]
         (tdir / "security_report.json").write_text(json.dumps({"verdict": "pass", "summary": "s", "findings": findings}))
-        s = orchestrator._security_summary("t1", tdir)
+        s = orchestrator._security_summary("t1", (tdir / "security_report.json").read_bytes())
         self.assertIn("12 finding(s)", s); self.assertIn("and 2 more", s); self.assertIn("tasks/t1/security_report.json", s)
         self.assertLess(len(s), 3000)
         a = approvals.request("t2", "merge", "y" * 5000)
@@ -133,6 +133,11 @@ class OrchestratorTests(TmpHome):
         with self.assertRaises(ValueError):
             proc("t1", runner.SdkBackend())
         self.assertEqual(orchestrator.load_entry("t1")["status"], "queued")      # nothing ran, nothing changed
+        import os
+        os.environ["AGENTSYS_BACKEND"] = "sdk"           # round 2: the default path, backend=None
+        with self.assertRaises(ValueError):
+            proc("t1", None)
+        self.assertEqual(orchestrator.load_entry("t1")["status"], "queued")
 
     def test_full_flow_with_merge_gate_and_patches(self):
         orchestrator.submit("t1", requirements=REQ)

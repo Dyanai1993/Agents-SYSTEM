@@ -73,9 +73,31 @@ def ensure_workspace(tdir, seed=None):
     return ws
 
 
+def _git_ok(ws, *args, env=None):
+    """A git call whose answer DECIDES something: a failure raises instead of reading as 'no changes'.
+    Phase 5 review (round 2): a failed `git status` returned '' and passed as a clean workspace."""
+    cmd = ["git", "-c", "user.name=agentsys", "-c", "user.email=agentsys@localhost", *args]
+    r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise StepFailed(f"git {' '.join(args[:3])} failed in {ws}: {(r.stderr or r.stdout).strip()[:200]}")
+    return r.stdout
+
+
 def _changed(ws):
-    out = _git(ws, "status", "--porcelain", "--untracked-files=all").stdout
-    return [line[3:].strip().strip('"') for line in out.splitlines() if line.strip()]
+    """Every changed path, both sides of a rename or copy. -z: no quoting, no ' -> ' joined paths.
+    Phase 5 review (round 2): 'R  qa_tests/q.py -> app.py' was read as ONE path inside qa_tests/."""
+    parts = _git_ok(ws, "status", "--porcelain=v1", "-z", "--untracked-files=all").split("\0")
+    files, i = [], 0
+    while i < len(parts):
+        entry = parts[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        files.append(entry[3:])
+        if "R" in entry[:2] or "C" in entry[:2]:      # the next field is the source path
+            files.append(parts[i])
+            i += 1
+    return files
 
 
 def _is_qa(path):
@@ -83,44 +105,39 @@ def _is_qa(path):
 
 
 def _head(ws):
-    return _git(ws, "rev-parse", "HEAD").stdout.strip()
-
-
-def _agent_mutations(ws, before_head, keep_qa):
-    """What a role that must not change the workspace changed anyway: working-tree and STAGED changes, and
-    any commit it made itself (a self-made commit leaves a clean `git status`). keep_qa: the tester may
-    write qa_tests/; the security reviewer may write nothing."""
-    changed = [f for f in _changed(ws) if not (keep_qa and _is_qa(f))]
-    if _head(ws) != before_head:
-        changed.append(f"(new commit on top of {before_head[:8]})")
-    return changed
-
-
-def _revert_agent_changes(ws, before_head, keep_qa):
-    """Back to before_head. `checkout -- .` alone restores from the INDEX, so a change the role had already
-    staged would survive it (the same staging gap protect_config and protect_qa had)."""
-    if keep_qa:
-        _git(ws, "reset", "-q", "--mixed", before_head)      # undoes its commits AND unstages; files stay
-        _git(ws, "checkout", "--", ".", f":(exclude){QA_DIR}")
-        _git(ws, "clean", "-fdq", "--", ".", f":(exclude){QA_DIR}")
-    else:
-        _git(ws, "reset", "-q", "--hard", before_head)
-        _git(ws, "clean", "-fdq")
+    sha = _git_ok(ws, "rev-parse", "HEAD").strip()
+    if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        raise StepFailed(f"cannot read HEAD in {ws}")
+    return sha
 
 
 def _worktree_id(ws):
     """A git tree id of the workspace AS IT IS, uncommitted changes included (a throwaway index, so the real
-    index is never touched). Equal ids = the same content was checked."""
+    index is never touched). Equal ids = the same content. Every step is checked: a failed `add -A` after a
+    good `read-tree` would otherwise return a valid id of the OLD content."""
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         env = dict(os.environ, GIT_INDEX_FILE=os.path.join(d, "index"))
-        for args in (["read-tree", "HEAD"], ["add", "-A"]):
-            subprocess.run(["git", *args], cwd=ws, env=env, capture_output=True, text=True)
-        tree = subprocess.run(["git", "write-tree"], cwd=ws, env=env, capture_output=True, text=True).stdout.strip()
+        _git_ok(ws, "read-tree", "HEAD", env=env)
+        _git_ok(ws, "add", "-A", env=env)
+        tree = _git_ok(ws, "write-tree", env=env).strip()
     if not re.fullmatch(r"[0-9a-f]{40,64}", tree):
-        # Fail closed: two failed reads would both be "" and compare equal, i.e. "unchanged" - skipping a check.
         raise StepFailed(f"cannot compute the workspace content id in {ws}")
     return tree
+
+
+def _tree_diff(ws, a, b):
+    """Paths whose content differs between two tree ids. --no-renames: a move lists BOTH paths."""
+    if a == b:
+        return []
+    return [p for p in _git_ok(ws, "diff-tree", "-r", "--no-renames", "--name-only", "-z", a, b).split("\0") if p]
+
+
+def _restore(ws, head):
+    """Back to `head` exactly: commits, index and files. Only ever called on a workspace that was CLEAN at
+    `head` before the agent ran (guarded_call checks that), so this removes the agent's work and nothing else."""
+    _git(ws, "reset", "-q", "--hard", head)
+    _git(ws, "clean", "-fdq")
 
 
 def protect_qa(ws, task_id):
@@ -224,10 +241,13 @@ def protect_config(ws, task_id, who):
 
 
 def commit_changes(ws, message, only=None):
+    """Commit exactly `files` (`-- paths` = --only: anything else already staged stays out of this commit).
+    Phase 5 review (round 2): a failed `git add` on a bad path left the index as the agent staged it, and a
+    commit without paths committed that instead."""
     files = [f for f in _changed(ws) if only is None or only(f)]
     if files:
-        _git(ws, "add", "--", *files)
-        _git(ws, "commit", "-q", "-m", message[:100])
+        _git_ok(ws, "add", "-A", "--", *files)
+        _git_ok(ws, "commit", "-q", "-m", message[:100], "--", *files)
     return files
 
 
@@ -257,17 +277,20 @@ def _item_hash(wi):
 UNVERIFIABLE_BACKENDS = {"sdk"}      # builds no tool log (live-verified): every tester report would fail closed
 
 
-def refuse_unverifiable_backend(backend):
-    """Phase 5 review: `--backend sdk` spent real calls (intake, plan, build) before the tester's evidence check
-    failed closed on the missing tool log. Refuse it before the first call; live_smoke.py keeps it."""
+def resolve_backend(backend):
+    """The backend every call of this task will use, checked BEFORE the first call. Phase 5 review: `--backend
+    sdk` spent real calls before the tester failed closed on the missing tool log; round 2: backend=None was
+    passed through unchecked and resolved later from AGENTSYS_BACKEND. live_smoke.py keeps sdk."""
+    backend = backend or runner.get_backend()
     if getattr(backend, "name", None) in UNVERIFIABLE_BACKENDS:
         raise ValueError(f"backend '{backend.name}' builds no tool log, so no tester report can be verified: use the cli backend")
+    return backend
 
 
 def run_task(task_id, requirements, *, backend, title=None, env=None, settings_paths=None, limits=None, seed=None):
     """Run or resume one task. Returns {"status", "state", "message", "report"}."""
     logger.safe_task_id(task_id)
-    refuse_unverifiable_backend(backend)            # the caller's bug, like bad requirements: raise before any call
+    backend = resolve_backend(backend)              # the caller's bug, like bad requirements: raise before any call
     tdir = config.home() / "tasks" / task_id
     tdir.mkdir(parents=True, exist_ok=True)
     schema.validate("requirements", requirements)   # bad input is the caller's bug: raise, do not log a task failure
@@ -307,7 +330,10 @@ def _status_report(tdir, task_id, status, msg):
     led = Ledger(task_id).data
     prog = _load_progress(tdir)
     ws = tdir / "workspace"
-    dirty = _changed(ws) if (ws / ".git").exists() else []
+    try:                                            # a report must never raise over the error it reports
+        dirty = _changed(ws) if (ws / ".git").exists() else []
+    except StepFailed:
+        dirty = ["(unknown: git status failed)"]
     p = tdir / "status_report.md"
     p.write_text(
         f"# Status report: {task_id}\n\nStatus: **{status}**\n\n{msg}\n\n"
@@ -336,6 +362,20 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         prog["final_done"] = False
         prog["security_done"] = False
         prog["req_hash"] = req_hash
+    # A guarded call whose changes could not be reverted leaves this marker. Nothing runs until the workspace
+    # is back to the state from before that call (checked here, not trusted) - or a human deletes the marker
+    # to keep the workspace as it is, deliberately. Phase 5 review (round 2): a later retry used to commit
+    # the leftovers as if they were a human's fix.
+    tainted = tdir / "workspace_tainted.json"
+    if tainted.exists():
+        t = json.loads(tainted.read_text(encoding="utf-8"))
+        if _head(ws) == t["head"] and not _changed(ws):
+            tainted.unlink()
+            logger.log_event(task_id, "orchestrator", "decision", "workspace restored after a failed revert: continuing", status="ok")
+        else:
+            raise StepFailed(f"the workspace still holds changes a {t['role']} call made and could not revert. Restore it: "
+                             f"`git -C tasks/{task_id}/workspace reset --hard {t['head'][:12]}` and `git clean -fd`, "
+                             f"or delete tasks/{task_id}/workspace_tainted.json to keep it as it is. Then retry")
     # Phase 5 review: both checks were tied to the requirement only, not to the code they checked. A manual fix
     # after a security failure re-ran security but not the regression; a changed workspace after both passed
     # reached review with no check at all. Each pass now records the exact content it checked.
@@ -397,33 +437,55 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
                 "acceptance_criteria": [{"id": f"{wi['id']}.{i + 1}", "text": t} for i, t in enumerate(wi["acceptance_criteria"])],
                 "original_criteria": [{"id": c, "text": ac[c]} for c in wi["covers"]]}
 
-    def guarded_call(role, calls, keep_qa):
-        """Run a role that must not change product files and check the workspace AFTERWARDS - also when the
-        call itself failed (a rejected report, a timeout, a usage limit). Phase 5 review: the check used to
-        sit after a successful return only, so a role that changed files AND produced an invalid report kept
-        its changes."""
-        before = _head(ws)
+    def guarded_call(role, call, keep_qa):
+        """Run ONE agent call of a role that must not change product files; check the workspace afterwards, also
+        when the call failed (a rejected report, a timeout, a usage limit, a pause).
+
+        Compared against the state from right BEFORE the call, never against HEAD alone - Phase 5 review
+        (round 2): a human's uncommitted edit was taken for the agent's and deleted (even on a pause before any
+        call). So the workspace must be clean when the call starts: anything uncommitted is a human's edit or
+        the leftover of a failed revert, and guessing which is how both went wrong. keep_qa: the tester may
+        write qa_tests/ (its earlier call's qa files may still be uncommitted); the security reviewer may
+        write nothing. Returns (output, the content id the call started from)."""
+        ctl = control.read(task_id)          # a pause/stop wins, and touches nothing
+        if ctl == "pause":
+            raise Paused("paused by user")
+        if ctl == "stop":
+            raise Stopped("stopped by user")
+        dirty = [f for f in _changed(ws) if not (keep_qa and _is_qa(f))]
+        if dirty:
+            raise NeedsInput(f"uncommitted changes in the workspace before the {role} run: {dirty[:10]}. Agents never leave "
+                             f"changes behind, so these are a manual edit or the leftover of a failed revert. If they are "
+                             f"your fix, commit them in tasks/{task_id}/workspace; otherwise discard them. Then retry")
+        head, tree = _head(ws), _worktree_id(ws)
         try:
-            out, err = calls(), None
+            out, err = call(), None
         except BaseException as e:           # every exception: KeyboardInterrupt included, it is re-raised below
             out, err = None, e
         protect_config(ws, task_id, role)
-        mutated = _agent_mutations(ws, before, keep_qa)
-        if mutated:
-            _revert_agent_changes(ws, before, keep_qa)
-            left = _agent_mutations(ws, before, keep_qa)
-            if left:                         # git calls are unchecked: verify the result instead of trusting them
+        changed = _tree_diff(ws, tree, _worktree_id(ws))
+        product = [f for f in changed if not (keep_qa and _is_qa(f))]
+        moved = _head(ws) != head            # a commit it made itself, even one that changed nothing
+        if product or moved or (err is not None and changed):    # a discarded report keeps none of its files
+            _restore(ws, head)
+            # Verify, never trust the restore. Uncommitted qa_tests/ files of the tester's earlier call may go
+            # with it (its reports are discarded too); every other path must be exactly as before the call.
+            left = [f for f in _tree_diff(ws, tree, _worktree_id(ws)) if not (keep_qa and _is_qa(f))]
+            if _head(ws) != head or left:
+                _save(tdir / "workspace_tainted.json", {"role": role, "head": head})
                 logger.log_event(task_id, "orchestrator", "alert", f"{role} changed files and they could NOT be reverted",
-                                 status="blocked", payload={"files": left})
-                raise StepFailed(f"{role} modified product files {mutated} and they could NOT be reverted ({left}): "
-                                 f"the workspace needs a human before anything else runs")
+                                 status="blocked", payload={"files": product or changed})
+                raise StepFailed(f"{role} changed {product or changed} and they could NOT be reverted: the workspace "
+                                 f"needs a human before anything else runs")
+        if product or moved:
+            what = product + ([f"(a commit on top of {head[:8]})"] if moved else [])
             logger.log_event(task_id, "orchestrator", "alert", f"{role} changed files it must not change: reverted, report invalid",
-                             status="blocked", payload={"files": mutated, "call_error": str(err)[:300] if err else None})
+                             status="blocked", payload={"files": what, "call_error": str(err)[:300] if err else None})
             if err is None or isinstance(err, StepFailed):
-                raise StepFailed(f"{role} modified product files {mutated}: report discarded" + (f" (and: {err})" if err else ""))
+                raise StepFailed(f"{role} modified product files {what}: report discarded" + (f" (and: {err})" if err else ""))
         if err is not None:
             raise err
-        return out
+        return out, tree
 
     def tester_call(view, expected, constraint_ids, test_strategy, files):
         payload = {"work_item": view, "constraints": req_view["constraints"], "test_strategy": test_strategy, "files_changed": files}
@@ -431,20 +493,26 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         def post(res):
             return semantics.process_test_report(res.output, expected, constraint_ids, res.tool_log)
 
-        def calls():
-            rep = agent("tester", payload, post_process=post)
-            # A report that only MISSES coverage (nothing skipped, nothing failed) is a tester omission, not a question
-            # for the user. Ask the tester once to complete it. One extra call is cheaper than stopping the whole task.
-            if rep["verdict"] == "blocked" and rep.get("gaps") and not any(c["result"] == "skipped" for c in rep["checks"]):
-                logger.log_event(task_id, "orchestrator", "decision", f"tester report incomplete: asking once to complete it ({len(rep['gaps'])} gaps)",
-                                 status="pending", payload={"gaps": rep["gaps"]})
-                rep = agent("tester", dict(payload, rejection={"gaps": rep["gaps"], "instruction":
-                            "Your previous report was incomplete. Run the missing checks now and report them in `checks`, with the ids in "
-                            "`criterion_ids`. Mark a constraint not applicable only in `constraints_na` with a reason. "
-                            "Statements in `summary` do not count."}), post_process=post)
-            return rep
-        rep = guarded_call("tester", calls, keep_qa=True)
+        # Each call is guarded on its own. Phase 5 review (round 2): with one check around both calls, a tester
+        # could change a product file in the first call and put it back in the second, unseen.
+        rep, start = guarded_call("tester", lambda: agent("tester", payload, post_process=post), keep_qa=True)
+        # A report that only MISSES coverage (nothing skipped, nothing failed) is a tester omission, not a question
+        # for the user. Ask the tester once to complete it. One extra call is cheaper than stopping the whole task.
+        if rep["verdict"] == "blocked" and rep.get("gaps") and not any(c["result"] == "skipped" for c in rep["checks"]):
+            logger.log_event(task_id, "orchestrator", "decision", f"tester report incomplete: asking once to complete it ({len(rep['gaps'])} gaps)",
+                             status="pending", payload={"gaps": rep["gaps"]})
+            rep, _ = guarded_call("tester", lambda: agent("tester", dict(payload, rejection={"gaps": rep["gaps"], "instruction":
+                                  "Your previous report was incomplete. Run the missing checks now and report them in `checks`, with the ids in "
+                                  "`criterion_ids`. Mark a constraint not applicable only in `constraints_na` with a reason. "
+                                  "Statements in `summary` do not count."}), post_process=post), keep_qa=True)
         commit_changes(ws, f"qa: {view['id']}", only=_is_qa)
+        # The content this report is about: the product files as they were when the first call started (both calls
+        # were checked not to change them) plus the qa files just committed. Verified here, not assumed - Phase 5
+        # review (round 2): the id was read after the check, so a change in between was recorded as checked.
+        checked = _worktree_id(ws)
+        moved = [f for f in _tree_diff(ws, start, checked) if not _is_qa(f)]
+        if moved:
+            raise StepFailed(f"the workspace changed while the tester checked it ({moved[:10]}): report discarded")
         prog["reports"] += 1
         (tdir / "reports").mkdir(exist_ok=True)
         _save(tdir / "reports" / f"test_report-{prog['reports']:03d}-{view['id']}.json", rep)
@@ -454,20 +522,22 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
                              f"verdict corrected by rules: reported {rep['verdict_reported']} -> {rep['verdict']}", status="ok")
         logger.log_event(task_id, "tester", "test_run", f"{view['id']}: verdict {rep['verdict']} ({len(rep['checks'])} checks)",
                          status="ok" if rep["verdict"] == "pass" else "error", payload={"verdict": rep["verdict"]})
-        return rep
+        return rep, checked
 
     def security_call():
-        base = _git(ws, "rev-list", "--max-parents=0", "HEAD").stdout.split()[0]
-        files = _git(ws, "diff", "--name-only", f"{base}..HEAD").stdout.split()
+        base = _git_ok(ws, "rev-list", "--max-parents=0", "HEAD").split()[0]
+        files = [p for p in _git_ok(ws, "diff", "--name-only", "-z", f"{base}..HEAD").split("\0") if p]
         payload = {"goal": req["goal"], "constraints": req_view["constraints"], "files_changed": files}
 
         def post(res):
             return semantics.process_security_report(res.output, ws)
-        rep = guarded_call("security", lambda: agent("security", payload, post_process=post), keep_qa=False)
+        rep, checked = guarded_call("security", lambda: agent("security", payload, post_process=post), keep_qa=False)
+        if _worktree_id(ws) != checked:
+            raise StepFailed("the workspace changed while the security reviewer checked it: report discarded")
         _save(tdir / "security_report.json", rep)
         logger.log_event(task_id, "security", "test_run", f"verdict {rep['verdict']} ({len(rep['findings'])} finding(s))",
                          status="ok" if rep["verdict"] == "pass" else "error", payload={"verdict": rep["verdict"]})
-        return rep
+        return rep, checked
 
     # ---- build / test / fix, one work item at a time
     # No long-lived Ledger here: a fresh instance is constructed right before each record_*() call below, so
@@ -504,7 +574,7 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
             tasks.set_state(task_id, "test", title=title, current_agent="tester")
             # The tester sees the item, constraints and changed files. It never sees the developer's notes or reasoning.
             expected = [c["id"] for c in view["acceptance_criteria"]]
-            rep = tester_call(view, expected, list(cons), plan["test_strategy"], prog["last_files"])
+            rep, _ = tester_call(view, expected, list(cons), plan["test_strategy"], prog["last_files"])
             if rep["verdict"] == "pass":
                 prog["completed"][wi["id"]] = _item_hash(wi)
                 prog.update(step="dev", fix=0, last_report=None)
@@ -526,38 +596,34 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
 
     # ---- final regression: every original criterion and constraint, on the finished workspace
     if not prog["final_done"]:
-        # Uncommitted changes here can only be a human's manual fix (every agent step commits or reverts its own).
-        # Commit them so they are tested, security-reviewed and delivered - and so the tester's own change check
-        # does not mistake them for edits by the tester and revert them.
-        manual = commit_changes(ws, "manual: uncommitted workspace changes before the final regression")
-        if manual:
-            logger.log_event(task_id, "orchestrator", "alert", f"committed {len(manual)} uncommitted file(s) found before the final regression",
-                             status="ok", payload={"files": manual})
+        # A human's manual fix must be COMMITTED by the human first: uncommitted changes stop the tester call
+        # (guarded_call). Phase 5 review (round 2): auto-committing them here also committed the leftovers of a
+        # failed revert, as a "manual" fix.
         tasks.set_state(task_id, "test", title=title, current_agent="tester")
         final_view = {"id": "FINAL", "title": "Full regression of the finished workspace", "files": [], "depends_on": [],
                       "acceptance_criteria": req_view["acceptance_criteria"], "original_criteria": []}
-        rep = tester_call(final_view, list(ac), list(cons), plan["test_strategy"], [])
+        rep, checked = tester_call(final_view, list(ac), list(cons), plan["test_strategy"], [])
         if rep["verdict"] == "blocked":
             raise NeedsInput(f"tester could not complete the final regression: {rep['summary']}")
         if rep["verdict"] == "fail":
             raise StepFailed(f"final regression failed: {rep['summary']}")
-        prog["final_done"], prog["final_tree"] = True, _worktree_id(ws)
+        prog["final_done"], prog["final_tree"] = True, checked
         save()
 
     # ---- security review: once, on the whole finished workspace (Phase 5). Never auto-blocks on its own
     # judgment calls ("blocked") or on low/medium findings - those are surfaced to the human at the merge
-    # gate instead (see orchestrator._merge_context). A demonstrated high/critical finding DOES stop here,
+    # gate instead (see orchestrator._merge_request). A demonstrated high/critical finding DOES stop here,
     # the same way a failed final regression does: a human decides, rather than the task sailing on to ask
     # for merge approval with a confirmed vulnerability already in hand.
     if not prog["security_done"]:
         tasks.set_state(task_id, "security", title=title, current_agent="security")
-        rep = security_call()
+        rep, checked = security_call()
         if rep["verdict"] == "blocked":
             raise NeedsInput(f"security reviewer needs information to finish: {rep['summary']}")
         if rep["verdict"] == "fail":
             raise StepFailed(f"security review found {sum(1 for f in rep['findings'] if f['severity'] in ('high', 'critical'))} "
                              f"high/critical finding(s): {rep['summary']}")
-        prog["security_done"], prog["security_tree"] = True, _worktree_id(ws)
+        prog["security_done"], prog["security_tree"] = True, checked
         save()
     tasks.set_state(task_id, "review", title=title, current_agent=None, waiting_approval=True)
     (tdir / "summary.md").write_text(

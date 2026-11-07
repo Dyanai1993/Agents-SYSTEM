@@ -130,58 +130,60 @@ def _retry(task_id, answer=None):
 
 SECURITY_SHOWN = 10            # findings listed in the approval itself; the full report is always named
 SECURITY_DESC_CHARS = 200
+SECURITY_FIELD_CHARS = 80
+SUMMARY_CHARS = 1500
 
 
-def _security_summary(task_id, tdir):
+def _cut(s, n):
+    s = str(s)
+    return s if len(s) <= n else s[:n] + "..."
+
+
+def _security_summary(task_id, sec_bytes):
     # A high/critical finding already stopped the task before it could reach review (loop.py's
     # security_call), so only low/medium findings - real but not blocking - can appear here. Surfaced to
     # the human approving the merge instead of being silently dropped once they stop blocking anything.
-    # Phase 5 review: an unbounded list could be cut off by the 4000-character approval limit, silently.
-    # Every line is bounded now, and the full report is always named.
-    p = tdir / "security_report.json"
-    if not p.exists():
+    # Phase 5 review: every line is bounded (round 2: category and file too) and the full report is named.
+    if sec_bytes is None:
         return "Security review: no report (task predates Phase 5, or a prior error)."
-    rep = json.loads(p.read_text(encoding="utf-8"))
-    findings = rep.get("findings") or []
+    findings = json.loads(sec_bytes.decode("utf-8")).get("findings") or []
     if not findings:
         return "Security review: no findings."
     lines = []
     for f in findings[:SECURITY_SHOWN]:
-        desc = f["description"] if len(f["description"]) <= SECURITY_DESC_CHARS else f["description"][:SECURITY_DESC_CHARS] + "..."
-        lines.append(f"- [{f['severity']}] {f['category']} in {f['file']}" + (f":{f['line']}" if f.get("line") else "") + f" - {desc}")
+        lines.append(f"- [{f['severity']}] {_cut(f['category'], SECURITY_FIELD_CHARS)} in {_cut(f['file'], SECURITY_FIELD_CHARS)}"
+                     + (f":{f['line']}" if f.get("line") else "") + f" - {_cut(f['description'], SECURITY_DESC_CHARS)}")
     if len(findings) > SECURITY_SHOWN:
         lines.append(f"- ... and {len(findings) - SECURITY_SHOWN} more")
     return (f"Security review: {len(findings)} finding(s), none blocking. Full report: tasks/{task_id}/security_report.json\n"
             + "\n".join(lines))
 
 
-def _merge_context(task_id, tdir):
-    summary = (tdir / "summary.md").read_text(encoding="utf-8") if (tdir / "summary.md").exists() else ""
-    ws = tdir / "workspace"
-    stat = loop._git(ws, "diff", "--stat", f"{_base(ws)}..HEAD", "--", ".", *JUNK).stdout.strip()
-    # Security comes before the file list: the file list is the part that may be long.
-    return (f"{summary}\n{_security_summary(task_id, tdir)}\n\nChanged files:\n{stat}\n\n"
-            f"Approving prepares patch files (and a branch `agentsys/{task_id}` if a target repo was given). Nothing is merged into main.")
-
-
 def _base(ws):
     return loop._git(ws, "rev-list", "--max-parents=0", "HEAD").stdout.split()[0]
 
 
-def _merge_diff_ref(task_id, tdir):
-    """Identifies exactly what a merge approval covers: the workspace commit AND the requirement version it
-    was built against. Either changing (e.g. `orch.py retry --answer` adding a constraint, which forces a new
-    final regression and possibly new commits) must force a fresh human approval instead of reusing an old
-    'approved' decision made for different content."""
+def _merge_request(task_id, tdir):
+    """The merge approval's context AND its identity, built from ONE read of each input. Phase 5 review
+    (round 2): the context and the identity read the security report separately, so a report swapped in
+    between gave an approval that SHOWED one report and was bound to another.
+
+    The identity covers the workspace commit, the requirement version, and the security report: any of them
+    changing (e.g. `orch.py retry --answer`) forces a fresh human approval instead of reusing an old one.
+    Security comes FIRST in the context, then a bounded summary, then the (possibly long) file list - round 2:
+    a long plan summary pushed the whole security section, report path included, past the 4000-char cut."""
     ws = tdir / "workspace"
-    ws_sha = loop._git(ws, "rev-parse", "HEAD").stdout.strip()
+    ws_sha = loop._head(ws)
     prog_path = tdir / "progress.json"
     req_hash = json.loads(prog_path.read_text(encoding="utf-8")).get("req_hash") if prog_path.exists() else None
-    # Phase 5 review: the security report is part of what the human approves. An approval made before it
-    # existed (or for a different report) for the same commit used to stay valid.
     sec = tdir / "security_report.json"
-    sec_hash = hashlib.sha256(sec.read_bytes()).hexdigest()[:16] if sec.exists() else "none"
-    return f"git:{ws_sha}:req:{req_hash}:sec:{sec_hash}"
+    sec_bytes = sec.read_bytes() if sec.exists() else None
+    sec_hash = hashlib.sha256(sec_bytes).hexdigest()[:16] if sec_bytes is not None else "none"
+    summary = (tdir / "summary.md").read_text(encoding="utf-8") if (tdir / "summary.md").exists() else ""
+    stat = loop._git(ws, "diff", "--stat", f"{_base(ws)}..{ws_sha}", "--", ".", *JUNK).stdout.strip()
+    context = (f"{_security_summary(task_id, sec_bytes)}\n\n{_cut(summary, SUMMARY_CHARS)}\n\nChanged files:\n{stat}\n\n"
+               f"Approving prepares patch files (and a branch `agentsys/{task_id}` if a target repo was given). Nothing is merged into main.")
+    return context, f"git:{ws_sha}:req:{req_hash}:sec:{sec_hash}"
 
 
 def _delivery_journal(tdir):
@@ -284,7 +286,7 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
         raise KeyError(task_id)
     if entry["status"] in ("done", "rejected"):
         return entry
-    loop.refuse_unverifiable_backend(backend)        # before intake: intake is a real call too
+    backend = loop.resolve_backend(backend)          # before intake: intake is a real call too
     tdir = config.home() / "tasks" / task_id
     kw = dict(env=env, settings_paths=settings_paths)
 
@@ -351,7 +353,8 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
         return finish(res["status"], res["message"])
 
     # ---- merge gate
-    ap = approvals.request(task_id, "merge", _merge_context(task_id, tdir), diff_ref=_merge_diff_ref(task_id, tdir))
+    context, diff_ref = _merge_request(task_id, tdir)
+    ap = approvals.request(task_id, "merge", context, diff_ref=diff_ref)
     st = approvals.status(ap["id"])
     if st == "pending":
         tasks.set_state(task_id, "review", title=entry["title"], waiting_approval=True)

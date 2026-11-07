@@ -849,12 +849,14 @@ If the workspace cannot be read, return `{"verdict": "blocked", "summary": "<the
           "category": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 100,
             "pattern": "\\S",
             "description": "e.g. command injection, prompt injection, secret leak, path traversal, unsafe deserialization, permission leak"
           },
           "file": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 300,
             "pattern": "\\S",
             "description": "Path relative to the workspace root"
           },
@@ -997,16 +999,14 @@ import re
 from pathlib import Path
 
 
-# A model paraphrasing a real command or output may swap one quote STYLE for another
-# (`python -c 'print(1)'` vs `python -c "print(1)"`). All three quote characters are mapped to one, never
-# deleted: whether a quote is THERE carries meaning ({"enabled": "false"} is a string, {"enabled": false} a
-# boolean; os.system("user_input") is a literal, os.system(user_input) a variable). Phase 5 review: deleting
-# them let evidence with a different meaning match.
-_QUOTE_STYLE = str.maketrans("'`", '""')
+# Quotes are compared exactly as written. Phase 5 review: deleting them let {"enabled":"false"} back
+# {"enabled":false}; round 2: even unifying their STYLE changes meaning (invalid JSON {"enabled":'false'}
+# backed valid JSON; a JavaScript '${name}' literal backed a `${name}` template). A model that re-quotes a
+# real command or output is rejected - a false rejection, which blocks a task, never a false acceptance.
 
 
 def norm(cmd: str) -> str:
-    return re.sub(r"\s+", " ", (cmd or "").strip()).translate(_QUOTE_STYLE)
+    return re.sub(r"\s+", " ", (cmd or "").strip())
 
 
 # ------------------------------------------------------------------ plan
@@ -1068,13 +1068,13 @@ _PATH_TOKEN = re.compile(r"\S*[/\\]\S*|\b[A-Za-z]:\S*")
 
 
 def _squash(text: str) -> str:
-    """Drop whitespace, mask path-like tokens, and unify quote style (see _QUOTE_STYLE).
+    """Drop whitespace and mask path-like tokens. Quotes are kept exactly (see norm).
 
     Git Bash on Windows rewrites /tmp/f.txt to C:/Users/.../f.txt in the output, so a quoted
     path never equals the real one. Both sides are masked the same way: the numbers and words
     around the path must still match, the path itself does not.
     """
-    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or "")).translate(_QUOTE_STYLE)
+    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or ""))
 
 
 MIN_SHARE = 0.75
@@ -1100,9 +1100,18 @@ def _evidence_in_output(evidence: str, outputs_squashed: str) -> bool:
     (tried after live run T-0023, where one check quoted two scenarios) let a label from one line be joined
     to a value from another ("test_result: ... PASS" against "test_result: FAIL ... expected result: PASS").
     Two scenarios are two checks; the tester prompt says so.
+
+    The quote is first tried exactly as written, dots included: real output can contain "..." itself
+    ("Waiting for service... ready"). Only if that fails is "..." read as a cut. Phase 5 review (round 2).
     """
-    ev = _squash(re.sub(r"\.\.\.|\u2026", "", evidence or ""))      # '...' marks a cut, not content
-    if len(ev) < MIN_EVIDENCE_CHARS or not outputs_squashed:
+    if not outputs_squashed:
+        return False
+    return any(_one_run(ev, outputs_squashed)
+               for ev in (_squash(evidence), _squash(re.sub(r"\.\.\.|\u2026", "", evidence or ""))))
+
+
+def _one_run(ev: str, outputs_squashed: str) -> bool:
+    if len(ev) < MIN_EVIDENCE_CHARS:
         return False
     m = difflib.SequenceMatcher(None, ev, outputs_squashed, autojunk=False).find_longest_match(0, len(ev), 0, len(outputs_squashed))
     if m.a + m.size != len(ev):      # evidence has its own unmatched tail: the claimed payload itself differs
@@ -1221,20 +1230,49 @@ def security_evidence_errors(report: dict, ws: Path) -> list:
 REDACTED = "[REDACTED]"
 
 
+MAX_MASKS = 3
+_SECRET_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~+/=")
+
+
 def _quote_in_file(evidence: str, raw: str) -> bool:
     """The security prompt asks for secrets to be masked as [REDACTED], so the report never stores one.
-    A masked quote must still be real: the kept text around each mask must sit on ONE line of the file, in
-    order, with a non-empty value where each mask is - never glued together from different lines."""
+    A masked quote must still be real: kept text and masks in order, on ONE line of the file.
+
+    Phase 5 review (round 2): a mask matched ANY text (`.+?`), so `API_KEY="[REDACTED]"` matched
+    `API_KEY="" # debug = "ok"`, and many masks made the regex search explode. Now a mask stands for exactly
+    one secret-like value: one or more of _SECRET_CHARS (no quote, space or other syntax), taken greedily -
+    so the text after a mask must start with a character that cannot be part of a value. At most MAX_MASKS.
+    Deterministic, no backtracking: one pass per place the first kept piece occurs."""
+    def flat(s):                              # whitespace runs -> one space; edges kept (they are real text)
+        return re.sub(r"\s+", " ", s)
     if REDACTED not in evidence:
         ev = norm(evidence)
         return len(ev) >= MIN_EVIDENCE_CHARS and ev in norm(raw)
-    def keep_edges(s):                       # like norm(), but the spaces next to a mask are real text
-        return re.sub(r"\s+", " ", s).translate(_QUOTE_STYLE)
-    pieces = [keep_edges(p) for p in evidence.split(REDACTED)]
-    if len("".join(pieces).strip()) < MIN_EVIDENCE_CHARS:
+    pieces = [flat(p) for p in evidence.split(REDACTED)]
+    if len(pieces) - 1 > MAX_MASKS or len("".join(pieces).strip()) < MIN_EVIDENCE_CHARS:
         return False
-    pattern = re.compile(".+?".join(re.escape(p) for p in pieces))
-    return any(pattern.search(keep_edges(line)) for line in raw.splitlines())
+    if any(not p or p[0] in _SECRET_CHARS for p in pieces[1:-1]) or (pieces[-1] and pieces[-1][0] in _SECRET_CHARS):
+        return False                          # a mask must end where a value ends
+    for line in raw.splitlines():
+        line = flat(line)
+        start = line.find(pieces[0])
+        while start != -1:
+            if _masked_at(line, start, pieces):
+                return True
+            start = line.find(pieces[0], start + 1)
+    return False
+
+
+def _masked_at(line, pos, pieces):
+    pos += len(pieces[0])
+    for piece in pieces[1:]:
+        end = pos
+        while end < len(line) and line[end] in _SECRET_CHARS:
+            end += 1
+        if end == pos or not line.startswith(piece, end):    # an empty value is not a secret
+            return False
+        pos = end + len(piece)
+    return True
 
 
 def derive_security_verdict(findings) -> str:
