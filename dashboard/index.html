@@ -147,7 +147,8 @@ async function assistantView(auto){
     rb.onclick=async()=>{rb.disabled=true;rb.textContent="Retrying...";const r=await post("/api/assistant/retry",{session:sid});if(!r.ok)flash["msg:"+sid]={cls:"bad",text:r.body.error};tick();};
     log.append(el("div",{class:"row ai"},el("div",{class:"who"},"Assistant"),el("div",{class:"bub ai fail"},el("b",{class:"bad"},"The assistant could not answer."),
       el("div",{class:"btxt small",dir:"auto",style:"margin-top:4px"},turn.error),
-      el("div",{style:"margin-top:8px"},rb,el("span",{class:"mut small"},"  Nothing is retried on its own. One Retry = one new call.")))));}
+      sub?el("div",{class:"warn small",style:"margin-top:8px"},"This message was never answered, so it is NOT part of the submitted requirement."):   // the server refuses a retry after submission
+        el("div",{style:"margin-top:8px"},rb,el("span",{class:"mut small"},"  Nothing is retried on its own. One Retry = one new call.")))));}
   conv.append(log);
   if(!sub)conv.append(composer("msg:"+sid,{rows:2,busy,ph:busy?"Write your next message - you can send it after the reply":"Answer, correct, or add something...",
     send:async text=>{const k="msg:"+sid,r=await post("/api/assistant/message",{session:sid,text});
@@ -177,6 +178,9 @@ async function assistantView(auto){
     rd.append(el("div",{class:"ok"},"Approved revision "+sub.revision+" and queued it as "+sub.task_id+" (status: "+(v.task_status||"?")+")."),go,
       el("div",{class:"mut"},"Start it with: python scripts/orch.py run-next. Questions during execution come back as needs_input."));}
   else if(!v.ready)rd.append(list("What prevents submission",v.blockers,"bad"));
+  if(!sub&&v.ready&&(busy||turn.status==="failed"))   // allowed (your decision), but never silent: seen live, an unanswered answer was left out of T-0024
+    rd.append(el("div",{class:"bad",style:"margin:6px 0"},(turn.status==="failed"?"Your last message failed and is NOT in this draft. Press Retry first":"Your last message is not answered yet, so it is NOT in this draft. Wait for the reply first")+
+      " if it matters - submitting now hands the agents the draft exactly as shown."));
   else if(dirty.length)rd.append(el("div",{class:"warn"},"Save your edits before submitting."));
   else if(!reviewOpen[sid]){const rv=el("button",{},"Review and submit");rv.onclick=()=>{reviewOpen[sid]=v.revision;tick();};rd.append(el("div",{class:"ok"},"Ready to submit."),rv);}
   else{const d=v.draft,ok=el("button",{style:"margin:6px 6px 0 0"},"Approve and submit revision "+v.revision),cancel=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
