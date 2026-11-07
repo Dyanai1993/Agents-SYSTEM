@@ -81,3 +81,12 @@ Still read-only (files only, no LLM, no lock probing). `python dashboard/server.
   report with its findings; cost per agent and per model in tokens (summed from the task's own log - every call's tokens are
   logged exactly once), calls per agent, agent time, share of the token cap.
 - Writes stay as before: approval decisions and pause/resume/stop control files.
+
+## Requirement gate (free-text CLI requests)
+`orch.py submit ID --request "..."` -> intake (Haiku) writes a DRAFT to `tasks/<id>/requirements.json` -> the task waits
+at a `requirements` approval gate (dashboard or `orch.py approve`). Nothing is built from an unapproved draft; the approved
+draft becomes `entry["requirements"]` and the build starts on the next `run-next`. Before approval,
+`orch.py retry ID --answer "..."` adds the answer to the DRAFT as a clarification constraint (no model call) - the changed
+draft needs approval again (the approval's `diff_ref` is the draft's hash). Approval with an open BLOCKING question is
+refused from the dashboard. Reject cancels the task. A structured `submit --goal/--criteria` needs no requirement approval.
+The Approvals list shows only the latest request per task and gate (an older one was superseded).

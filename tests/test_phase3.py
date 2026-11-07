@@ -1,5 +1,5 @@
 import json, subprocess, time, unittest
-from agentsys import actions, approvals, control, dashboard_data as dd, ledger, loop, orchestrator, runner, scheduler
+from agentsys import actions, approvals, control, dashboard_data as dd, intake, ledger, loop, orchestrator, runner, scheduler
 from tests.base import TmpHome
 from tests.helpers import DEV, REQ, plan, t_pass, t_fail
 
@@ -366,8 +366,12 @@ class OrchestratorTests(TmpHome):
         orchestrator.submit("t1", request_text="deploy it")
         f = fb(orchestrator=req)
         e = proc("t1", f)
-        self.assertEqual(e["status"], "needs_input"); self.assertIn("Which cloud?", e["note"])
+        self.assertEqual(e["status"], "waiting_approval"); self.assertIn("Which cloud?", e["note"])   # shown at the gate
         self.assertEqual([c["role"] for c in f.calls], ["orchestrator"])
+        ap = approvals.latest("t1", "requirements")[0]
+        code, body = actions.handle_post("/api/approval/decide", {"id": ap["id"], "decision": "approved"}, DashboardActionTests.H)
+        self.assertEqual(code, 400); self.assertIn("Which cloud?", body["error"])                 # answer it first
+        self.assertEqual(approvals.status(ap["id"]), "pending")
 
     def test_intake_bad_output_blocks(self):
         orchestrator.submit("t1", request_text="x")
@@ -437,6 +441,65 @@ class SchedulerTests(TmpHome):
         scheduler.run_next(backend=fb(architect={"bad": 1}), env={}, settings_paths=[])
         self.assertEqual(orchestrator.load_entry("t1")["status"], "blocked")
         self.assertIsNone(scheduler.pick())
+
+
+class RequirementGateTests(TmpHome):
+    """A plain-language CLI request becomes a DRAFT; nothing is built until the human approves it."""
+    H = {"Host": "127.0.0.1:8765", "Content-Type": "application/json", "X-Agentsys": "1"}
+
+    def test_a_draft_waits_and_nothing_is_built_until_approved(self):
+        orchestrator.submit("t1", request_text="make a word counter")
+        f = fb()
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "waiting_approval"); self.assertIn("review the requirement", e["note"])
+        self.assertEqual([c["role"] for c in f.calls], ["orchestrator"])                    # intake only
+        self.assertIsNone(orchestrator.load_entry("t1")["requirements"])                    # not approved yet
+        n = len(f.calls)
+        self.assertEqual(proc("t1", f)["status"], "waiting_approval"); self.assertEqual(len(f.calls), n)   # waiting is free
+        self.assertIsNone(scheduler.pick())                                                  # nothing to run
+        self.assertIn("review the requirement draft", dd.overview()["tasks"][0]["attention"]["text"])
+        approvals.decide(approvals.latest("t1", "requirements")[0]["id"], "approved")
+        self.assertIn("requirement approved: continue", dd.overview()["tasks"][0]["attention"]["text"])
+        self.assertEqual(scheduler.pick()["task_id"], "t1")
+        e = proc("t1", f)
+        self.assertEqual(e["status"], "waiting_approval"); self.assertIn("merge", e["note"])     # built, now at the merge gate
+        self.assertIn("architect", [c["role"] for c in f.calls])
+        self.assertEqual(orchestrator.load_entry("t1")["requirements"]["goal"], REQ["goal"])
+
+    def test_an_answer_before_approval_changes_the_draft_and_needs_a_fresh_approval(self):
+        """It used to be written straight into an unapproved requirement and built from: a gate bypass."""
+        orchestrator.submit("t1", request_text="make a word counter")
+        f = fb(orchestrator=dict(REQ, unknowns=[{"question": "Skip blank lines?", "blocking": True}]))
+        proc("t1", f)
+        first = approvals.latest("t1", "requirements")[0]
+        e = orchestrator.retry("t1", answer="yes, skip them")
+        self.assertEqual((e["status"], e["requirements"]), ("waiting_approval", None))
+        draft = intake.draft("t1")
+        self.assertIn("Clarification from the user: yes, skip them", draft["constraints"]); self.assertEqual(intake.blocking_questions(draft), [])
+        second = approvals.latest("t1", "requirements")[0]
+        self.assertNotEqual(second["id"], first["id"])
+        self.assertEqual([a["id"] for a in approvals.pending() if a["task_id"] == "t1"], [second["id"]])   # the old one is not listed
+        approvals.decide(first["id"], "approved")                       # approving the superseded draft decides nothing
+        self.assertIsNone(scheduler.pick())
+        approvals.decide(second["id"], "approved")
+        proc("t1", f)
+        self.assertEqual([c["role"] for c in f.calls].count("orchestrator"), 1)              # no second intake call
+        self.assertIn("Clarification from the user: yes, skip them", orchestrator.load_entry("t1")["requirements"]["constraints"])
+
+    def test_a_blocking_question_cannot_be_approved_from_the_dashboard_and_reject_cancels(self):
+        orchestrator.submit("t1", request_text="deploy it")
+        proc("t1", fb(orchestrator=dict(REQ, unknowns=[{"question": "Which cloud?", "blocking": True}])))
+        ap = approvals.latest("t1", "requirements")[0]
+        code, body = actions.handle_post("/api/approval/decide", {"id": ap["id"], "decision": "approved"}, self.H)
+        self.assertEqual(code, 400); self.assertIn("Which cloud?", body["error"])
+        self.assertEqual(actions.handle_post("/api/approval/decide", {"id": ap["id"], "decision": "rejected"}, self.H)[0], 200)
+        self.assertEqual(proc("t1", fb())["status"], "rejected")
+
+    def test_a_structured_requirement_needs_no_requirement_approval(self):
+        orchestrator.submit("t1", requirements=REQ)
+        e = proc("t1", fb())
+        self.assertEqual(e["status"], "waiting_approval"); self.assertIn("merge", e["note"])
+        self.assertIsNone(approvals.latest("t1", "requirements")[0])
 
 
 class DashboardMonitorTests(TmpHome):

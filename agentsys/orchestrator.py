@@ -107,6 +107,22 @@ def _retry(task_id, answer=None):
     entry = load_entry(task_id)
     if entry is None:
         raise KeyError(task_id)
+    if answer and in_requirement_phase(entry) and entry["status"] in REQUIREMENT_PHASE_STATUSES and intake.draft(task_id):
+        # Before approval the answer changes the DRAFT, not the requirement: it used to be written straight into an
+        # unapproved requirement and built from - a gate bypass. The changed draft needs approval again (its hash
+        # changed). No model call: the clarification is added as a constraint, exactly as after approval.
+        answer = " ".join(answer.split())[:300]
+        req = intake.draft(task_id)
+        req = dict(req, constraints=list(req["constraints"]) + [f"Clarification from the user: {answer}"],
+                   unknowns=[dict(u, blocking=False) for u in req["unknowns"]])
+        schema.validate("requirements", req)
+        intake.save_draft(task_id, req)
+        ap = approvals.request(task_id, "requirements", intake.gate_context(task_id, req), diff_ref=intake.draft_ref(task_id))
+        entry.update(status="waiting_approval", resume_after=None, note=f"your answer was added to the draft: approve or reject it ({ap['id']})")
+        save_entry(entry)
+        tasks.set_state(task_id, "intake", title=entry["title"], waiting_approval=True)
+        logger.log_event(task_id, "human", "decision", "answer added to the requirement draft", status="ok")
+        return entry
     if entry["status"] not in RETRYABLE:
         raise ValueError(f"task is '{entry['status']}': retry applies to {sorted(RETRYABLE)}"
                          + (" (decide the pending approval instead)" if entry["status"] == "waiting_approval" else ""))
@@ -280,6 +296,57 @@ def process(task_id, *, backend, env=None, settings_paths=None):
         return _process(task_id, backend=backend, env=env, settings_paths=settings_paths)
 
 
+def _requirement_phase(task_id, entry, tdir, backend, kw, finish):
+    """Run the intake if no draft exists yet, then stop at the "requirements" gate until the human decides.
+    Returns a finished entry (stop here) or None (approved: build from intake.draft())."""
+    if not (tdir / "requirements.json").exists():
+        Ledger(task_id).begin_run()       # a retried intake attempt gets its own fresh run clock, like the build loop
+        try:
+            _, err = intake.run_intake(task_id, entry["request_text"], backend=backend, **kw)
+        except BudgetExceeded as e:
+            tasks.set_state(task_id, "blocked", title=entry["title"])
+            return finish("blocked", f"Limit hit during intake: {e.reason}. I stopped and need your decision.")
+        except runner.UsageLimitReached as e:
+            # Same as the main build loop's own handling: "paused", not "blocked" (a human doesn't need to
+            # decide anything), and a resume_after so the scheduler doesn't immediately retry the same call
+            # in a tight loop. Previously unhandled here: this would crash _process() on every retry and
+            # leave the queue entry stuck on "queued" forever, since "queued" was never set to anything else.
+            tasks.set_state(task_id, "paused", title=entry["title"])
+            return finish("paused", f"Usage limit reached during intake. State saved. Run the same command again later. ({e})",
+                         resume_after=_now_plus(RESET_GUESS_S))
+        if err:
+            tasks.set_state(task_id, "blocked", title=entry["title"])
+            return finish("blocked", f"intake failed: {err}")
+    req = intake.draft(task_id)
+    ap = approvals.request(task_id, "requirements", intake.gate_context(task_id, req), diff_ref=intake.draft_ref(task_id))
+    st = approvals.status(ap["id"])
+    if st == "pending":
+        tasks.set_state(task_id, "intake", title=entry["title"], waiting_approval=True)
+        q = intake.blocking_questions(req)
+        return finish("waiting_approval", "review the requirement draft: approve or reject it"
+                      + (f" - blocking question(s): {' | '.join(q)}" if q else "") + f" ({ap['id']})")
+    if st == "rejected":
+        tasks.set_state(task_id, "blocked", title=entry["title"])
+        return finish("rejected", "requirement rejected by user")
+    logger.log_event(task_id, "orchestrator", "decision", f"requirement approved ({ap['id']}): building from it", status="ok")
+    return None
+
+
+REQUIREMENT_PHASE_STATUSES = {"waiting_approval", "queued", "blocked", "needs_input", "paused"}
+
+
+def in_requirement_phase(entry):
+    return entry is not None and entry.get("requirements") is None and bool(entry.get("request_text"))
+
+
+def next_task_id():
+    """The next free T-#### id (dashboard submissions)."""
+    import re as _re
+    nums = [int(m.group(1)) for d in (_qdir(), config.home() / "tasks") if d.is_dir()
+            for p in d.iterdir() if (m := _re.fullmatch(r"T-(\d{4})(\.json)?", p.name))]
+    return f"T-{max(nums, default=0) + 1:04d}"
+
+
 def _process(task_id, *, backend, env=None, settings_paths=None):
     entry = load_entry(task_id)
     if entry is None:
@@ -314,28 +381,15 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
     if r is not None:
         return r
 
-    # ---- intake (only when no structured requirement exists yet)
+    # ---- requirement (only for a plain-language request): intake drafts it, the human approves it or replies
+    # and intake revises it. Nothing is built from an unapproved draft. entry["requirements"] is set only once
+    # approved (a structured requirement given at submit needs no approval: the human wrote it).
     req = entry["requirements"]
-    if req is None and (tdir / "requirements.json").exists():
-        req = json.loads((tdir / "requirements.json").read_text(encoding="utf-8"))
     if req is None:
-        Ledger(task_id).begin_run()       # a retried intake attempt gets its own fresh run clock, like the build loop
-        try:
-            req, err = intake.run_intake(task_id, entry["request_text"], backend=backend, **kw)
-        except BudgetExceeded as e:
-            tasks.set_state(task_id, "blocked", title=entry["title"])
-            return finish("blocked", f"Limit hit during intake: {e.reason}. I stopped and need your decision.")
-        except runner.UsageLimitReached as e:
-            # Same as the main build loop's own handling: "paused", not "blocked" (a human doesn't need to
-            # decide anything), and a resume_after so the scheduler doesn't immediately retry the same call
-            # in a tight loop. Previously unhandled here: this would crash _process() on every retry and
-            # leave the queue entry stuck on "queued" forever, since "queued" was never set to anything else.
-            tasks.set_state(task_id, "paused", title=entry["title"])
-            return finish("paused", f"Usage limit reached during intake. State saved. Run the same command again later. ({e})",
-                         resume_after=_now_plus(RESET_GUESS_S))
-        if err:
-            tasks.set_state(task_id, "blocked", title=entry["title"])
-            return finish("blocked", f"intake failed: {err}")
+        r = _requirement_phase(task_id, entry, tdir, backend, kw, finish)
+        if r is not None:
+            return r
+        req = intake.draft(task_id)
     entry["requirements"] = req
 
     # ---- core loop (resumes from progress.json)

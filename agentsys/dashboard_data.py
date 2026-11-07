@@ -67,6 +67,17 @@ def _attention(task_id, d, st, idle_min):
     state, status, note = st.get("state"), entry.get("status"), (entry.get("note") or "")[:300]
     if (d / "workspace_tainted.json").exists():
         return "bad", "an agent's changes could NOT be reverted: restore the workspace before anything else runs (see the task's alert)"
+    req_phase = entry.get("requirements") is None and bool(entry.get("request_text"))
+    if status == "waiting_approval":
+        from . import approvals
+        decided = approvals.latest(task_id, "requirements" if req_phase else "merge")[1]
+        if decided == "approved":                  # decided, but nothing runs until the next run-next picks it up
+            return "warn", ("requirement approved" if req_phase else "merge approved") + ": continue with `python scripts/orch.py run-next`"
+    if req_phase and status == "waiting_approval":
+        return "warn", "review the requirement draft: approve or reject it" + (
+            " - it has a BLOCKING question" if "blocking question" in note else "")
+    if status == "queued":
+        return "warn", "queued: start it with `python scripts/orch.py run-next`"
     if st.get("waiting_approval"):
         return "warn", "waiting for your approval"
     if status in ("needs_input", "needs_approval"):
@@ -217,7 +228,22 @@ def task_detail(task_id, now=None):
             "work": work_items(plan, prog, st.get("state")), "costs": _costs(events, bud),
             "security": _json(d / "security_report.json"), "tainted": _json(d / "workspace_tainted.json"),
             "idle_min": None if idle is None else round(idle, 1),
-            "attention": None if att is None else {"level": att[0], "text": att[1]}}
+            "attention": None if att is None else {"level": att[0], "text": att[1]},
+            "requirement": requirement_view(task_id)}
+
+
+def requirement_view(task_id):
+    """The original request, the draft (or the approved requirement) and the latest requirement approval.
+    phase=True while it still waits for the human."""
+    from . import approvals, intake
+    entry = _json(config.home() / "queue" / f"{task_id}.json") or {}
+    phase = entry.get("requirements") is None and bool(entry.get("request_text"))
+    ap, st = approvals.latest(task_id, "requirements")
+    draft = intake.draft(task_id)
+    return {"phase": phase, "status": entry.get("status"), "request": entry.get("request_text"),
+            "requirement": draft if phase or draft else entry.get("requirements"),
+            "blocking": intake.blocking_questions(draft) if phase else [],
+            "approval": {"id": ap["id"], "status": st} if ap else None}
 
 
 def quality():
@@ -249,6 +275,9 @@ def approvals_view():
     from . import approvals
     pend = []
     for a in approvals.pending():
+        entry = _json(config.home() / "queue" / f"{a['task_id']}.json") or {}
+        if a["gate"] == "requirements" and entry.get("status") != "waiting_approval":
+            continue                                   # a reply is pending: this draft is about to be revised
         st = _json(config.home() / "tasks" / a["task_id"] / "state.json") or {}
         pend.append(dict(a, task_title=st.get("title", a["task_id"]), task_state=st.get("state")))
     return {"pending": pend, "history": approvals.history()[-30:][::-1]}

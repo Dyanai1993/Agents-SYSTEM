@@ -111,7 +111,18 @@ def get_request(approval_id):
 
 
 def pending():
-    return [d for p in sorted(_dir("pending").glob("*.json")) if (d := _read(p)) and status(d["id"]) == "pending"]
+    """Undecided requests, only the LATEST per task and gate: an older one was superseded (a revised draft, new
+    commits) and deciding it would decide nothing - listing it only invites approving the wrong thing."""
+    latest_ids = {}
+    for p in _dir("pending").glob("*.json"):
+        d = _read(p)
+        if d:
+            m = re.match(r"^(.*)-(\d+)$", d["id"])
+            n = int(m.group(2)) if m else 0
+            key = (d["task_id"], d["gate"])
+            if key not in latest_ids or n > latest_ids[key][0]:
+                latest_ids[key] = (n, d)
+    return [d for _, d in sorted(latest_ids.values(), key=lambda x: x[1]["id"]) if status(d["id"]) == "pending"]
 
 
 def history():

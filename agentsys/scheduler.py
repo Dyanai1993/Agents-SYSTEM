@@ -26,7 +26,8 @@ def _runnable(e, now):
     if e["status"] == "needs_approval":
         return approvals.latest(e["task_id"], "opus")[1] == "approved"
     if e["status"] == "waiting_approval":                    # cheap: only when a decision file exists
-        _, st = approvals.latest(e["task_id"], "merge")
+        gate = "requirements" if orchestrator.in_requirement_phase(e) else "merge"
+        _, st = approvals.latest(e["task_id"], gate)
         return st in ("approved", "rejected")
     if e["status"] in NEEDS_HUMAN:
         return False                                          # needs a human; the dashboard shows why

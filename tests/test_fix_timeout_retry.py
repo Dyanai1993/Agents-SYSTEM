@@ -1,6 +1,6 @@
 """Found in live run T-0010: the 45-minute timeout counted the time a task waited for the human, and there was no way to re-queue it."""
 import json, time, unittest
-from agentsys import approvals, ledger, loop, orchestrator, runner, scheduler
+from agentsys import approvals, intake, ledger, loop, orchestrator, runner, scheduler
 from tests.base import TmpHome
 from tests.helpers import DEV, REQ, NEEDS, plan, t_pass
 
@@ -57,6 +57,8 @@ class TimeoutClockTests(TmpHome):
     def test_a_task_that_waited_overnight_resumes_after_retry(self):
         """The T-0010 story end to end: stopped for a question, hours later answered, must not die on the old clock."""
         orchestrator.submit("t1", request_text="make a counter")
+        self.assertEqual(proc("t1", fb())["status"], "waiting_approval")    # the requirement draft waits for the human
+        approvals.decide(approvals.latest("t1", "requirements")[0]["id"], "approved")
         e = proc("t1", fb(architect=NEEDS))
         self.assertEqual(e["status"], "needs_input")
         age_the_task(self.home, "t1", 10)
@@ -154,10 +156,9 @@ class RetryTests(TmpHome):
 
     def test_a_vague_answer_is_still_validated(self):
         orchestrator.submit("t1", request_text="x")
-        proc("t1", fb(orchestrator={"nope": 1}))                      # intake failed: no structured requirement exists
+        proc("t1", fb(orchestrator={"nope": 1}))                      # intake failed: no draft exists
         with self.assertRaises(ValueError):
             orchestrator.retry("t1", answer="anything")
-
 
 if __name__ == "__main__":
     unittest.main()
