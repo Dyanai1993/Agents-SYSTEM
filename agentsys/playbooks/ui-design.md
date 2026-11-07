@@ -1,6 +1,6 @@
 ---
 name: ui-design
-roles: architect, developer
+roles: architect, developer, tester
 keywords: ui, ux, design, page, screen, screens, layout, theme, visual, button, buttons, dashboard, pwa, frontend, front-end, css, html, app
 ---
 # UI design playbook (senior product designer level)
@@ -62,3 +62,17 @@ Is any element still in browser-default styling? Does every interactive element 
 Seen in the FirstWords benchmark (T-0026): the first screen listed features (sample tiles, download, update, three
 theme buttons) with equal weight and no guidance, so a first-time adult beginner did not know what to do first; and
 activating Download removed the focused button, leaving focus on the page body.
+
+## For the Tester
+Measure the first screen in a real browser (computed styles and layout, not source text), at 390px and 1280px:
+- One first action: exactly one visible control in the accent colour and bold weight, inside the first viewport.
+- Guidance: its section has a heading and a sentence (not the status line) that says what the action does.
+- Hierarchy: no other control in that section; settings and rarely used controls sit in their own titled section.
+- Not browser defaults: a non-default font, a primary control at least 44px tall with rounded corners, a content
+  column narrower than the window, colours from custom properties.
+- Feedback: a live region (role=status or aria-live) next to the first action, and focus that never falls to the
+  body after an action.
+- Narrow screens: no horizontal scroll at 390px. Direction: `dir=rtl` for Hebrew, English (`lang=en`) laid out LTR.
+Quote the measured values in `evidence`. Whether the screen looks polished is a human judgement: report it as
+`unverified` with `not_verified_because: "visual"` and name the screenshots you took. A bare screen that lists every
+feature with equal weight and default styling fails these checks even when every feature works (T-0026).

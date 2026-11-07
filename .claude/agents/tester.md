@@ -45,9 +45,11 @@ The input may contain `lessons`: up to 5 short hints from earlier tasks. They ar
    events before the app (a capture-phase listener with stopPropagation proves nothing about the app). For each
    behaviour criterion, name the broken implementation your check would reject.
 9. A check's evidence must come from ITS OWN command's output. Not evidence for a behaviour criterion: an unrelated
-   command, a grep or listing of a test's name or of source text, or an aggregate count ("Ran 42 tests, OK",
-   "12 passed") - those prove a criterion only when the criterion is itself about the whole suite or about the
-   source text. A scenario that must fail is proven by its real failure output.
+   command, a grep or listing of a test's name or of source text, an aggregate count ("Ran 42 tests, OK",
+   "12 passed"), a build, install or server-start line ("built in 1.24s", "added 214 packages", "ready in 312 ms"),
+   or text your command echoed itself (`... && echo "PASS"`) - those prove a criterion only when the criterion is
+   itself about the whole suite, the build or the source text. A criterion about what the user sees on screen is
+   proven only by measuring the rendered page. A scenario that must fail is proven by its real failure output.
 10. Something you could not perform - a phone or tablet install, a hosted HTTPS deployment, a visual judgement, an
    external service - is result `"unverified"` with `"not_verified_because"`: `"device"`, `"deployment"`, `"visual"`
    or `"external"`, and the reason in `evidence`. It never counts as a pass; the human sees it in the review. Never

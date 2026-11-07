@@ -24,3 +24,19 @@ class PwaBenchmarkTests(unittest.TestCase):
             self.assertFalse(broken["pass"], name)
         for note in out["visual"]["notes"]:
             self.assertIn("dir=rtl lang=he English tile ltr/en horizontal scroll false", note)
+
+    def test_first_use_eval_separates_a_bare_shell_from_the_reference(self):
+        """Benchmark phase 4: the reference meets all seven first-use criteria; a bare but functional shell (T-0026's
+        first screen) fails one clear first action, guidance, hierarchy and styling; every mutant of the reference
+        with one property broken fails the criterion it targets."""
+        if not (BENCH / "node_modules" / "playwright").is_dir() or not shutil.which("node"):
+            self.skipTest("evals/pwa_benchmark has no Playwright installed (npm install there)")
+        r = subprocess.run(["node", "first_use.mjs"], cwd=BENCH, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=400)
+        out = json.loads((BENCH / "results" / "first_use.json").read_text(encoding="utf-8"))
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-1000:])
+        self.assertTrue(out["reference_passes_all"])
+        self.assertEqual(out["bare_fails_first_use"], "4/4")
+        self.assertEqual(out["mutants_caught"], "7/7")
+        if "t0026" in out["report"]:      # the delivered T-0026 build, read-only, when it is on this machine
+            self.assertFalse(out["report"]["t0026"]["FU1 one clear first action"]["pass"])

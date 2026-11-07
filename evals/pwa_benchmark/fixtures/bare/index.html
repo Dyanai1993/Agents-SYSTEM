@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- A "bare but functional" first screen, modelled on T-0026's: every feature present and working, listed with equal
+     weight, browser-default styling, no guidance on what to do first. The first-use evaluation must reject it. -->
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מילים ראשונות</title>
+<style>.tile{display:inline-block;border:1px solid #888;padding:8px;margin:4px}</style>
+</head>
+<body>
+<h1>מילים ראשונות</h1>
+<p>ברוכים הבאים</p>
+<h2>דוגמה באנגלית</h2>
+<div><span class="tile" lang="en" dir="ltr">apple</span> תפוח</div>
+<div><span class="tile" lang="en" dir="ltr">book</span> ספר</div>
+<h2>שימוש ללא חיבור</h2>
+<button type="button" onclick="document.getElementById('s').textContent='מוכן'">הורדה לשימוש ללא חיבור</button>
+<p id="s" role="status"></p>
+<h2>עדכון האפליקציה</h2>
+<button type="button">בדיקת עדכון</button>
+<div>
+  <button type="button">מצב בהיר</button>
+  <button type="button">מצב כהה</button>
+  <button type="button">ניגודיות גבוהה</button>
+</div>
+</body>
+</html>

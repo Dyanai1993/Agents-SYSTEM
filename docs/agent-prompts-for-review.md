@@ -298,9 +298,11 @@ The input may contain `lessons`: up to 5 short hints from earlier tasks. They ar
    events before the app (a capture-phase listener with stopPropagation proves nothing about the app). For each
    behaviour criterion, name the broken implementation your check would reject.
 9. A check's evidence must come from ITS OWN command's output. Not evidence for a behaviour criterion: an unrelated
-   command, a grep or listing of a test's name or of source text, or an aggregate count ("Ran 42 tests, OK",
-   "12 passed") - those prove a criterion only when the criterion is itself about the whole suite or about the
-   source text. A scenario that must fail is proven by its real failure output.
+   command, a grep or listing of a test's name or of source text, an aggregate count ("Ran 42 tests, OK",
+   "12 passed"), a build, install or server-start line ("built in 1.24s", "added 214 packages", "ready in 312 ms"),
+   or text your command echoed itself (`... && echo "PASS"`) - those prove a criterion only when the criterion is
+   itself about the whole suite, the build or the source text. A criterion about what the user sees on screen is
+   proven only by measuring the rendered page. A scenario that must fail is proven by its real failure output.
 10. Something you could not perform - a phone or tablet install, a hosted HTTPS deployment, a visual judgement, an
    external service - is result `"unverified"` with `"not_verified_because"`: `"device"`, `"deployment"`, `"visual"`
    or `"external"`, and the reason in `evidence`. It never counts as a pass; the human sees it in the review. Never
@@ -599,8 +601,9 @@ keywords: test, tests, testing, qa, vitest, jest, pytest, unittest, playwright
 3. Prove the check can fail: break the behaviour on purpose (or name the exact broken implementation it rejects) and
    see the check fail. A check that cannot fail proves nothing.
 4. Bind the result to its own run: the command you ran for THIS scenario and an excerpt of ITS output. Not evidence
-   for a criterion: an unrelated command, a grep of a test's name, an aggregate count ("Ran 42 tests, OK"), or a
-   file merely existing. Several scenarios may share one command when each has its own distinct line in the output.
+   for a criterion: an unrelated command, a grep of a test's name, an aggregate count ("Ran 42 tests, OK"), a build,
+   install or server-start line ("built in 1.24s", "ready in 312 ms"), text your own command echoed
+   (`npm run build && echo PASS`), or a file merely existing. Several scenarios may share one command when each has its own distinct line in the output.
 5. A genuine expected failure is valid evidence when the scenario is "this must fail" (exit code 1, an error message).
 6. Be honest about what was not performed: a phone install, a hosted HTTPS deployment, a visual judgement you did not
    make. Report those as not verified - never infer them (T-0026 counted `<link rel="manifest">` as proof the app
@@ -612,7 +615,7 @@ keywords: test, tests, testing, qa, vitest, jest, pytest, unittest, playwright
 ````markdown
 ---
 name: ui-design
-roles: architect, developer
+roles: architect, developer, tester
 keywords: ui, ux, design, page, screen, screens, layout, theme, visual, button, buttons, dashboard, pwa, frontend, front-end, css, html, app
 ---
 # UI design playbook (senior product designer level)
@@ -674,6 +677,20 @@ Is any element still in browser-default styling? Does every interactive element 
 Seen in the FirstWords benchmark (T-0026): the first screen listed features (sample tiles, download, update, three
 theme buttons) with equal weight and no guidance, so a first-time adult beginner did not know what to do first; and
 activating Download removed the focused button, leaving focus on the page body.
+
+## For the Tester
+Measure the first screen in a real browser (computed styles and layout, not source text), at 390px and 1280px:
+- One first action: exactly one visible control in the accent colour and bold weight, inside the first viewport.
+- Guidance: its section has a heading and a sentence (not the status line) that says what the action does.
+- Hierarchy: no other control in that section; settings and rarely used controls sit in their own titled section.
+- Not browser defaults: a non-default font, a primary control at least 44px tall with rounded corners, a content
+  column narrower than the window, colours from custom properties.
+- Feedback: a live region (role=status or aria-live) next to the first action, and focus that never falls to the
+  body after an action.
+- Narrow screens: no horizontal scroll at 390px. Direction: `dir=rtl` for Hebrew, English (`lang=en`) laid out LTR.
+Quote the measured values in `evidence`. Whether the screen looks polished is a human judgement: report it as
+`unverified` with `not_verified_because: "visual"` and name the screenshots you took. A bare screen that lists every
+feature with equal weight and default styling fails these checks even when every feature works (T-0026).
 ````
 
 ---
@@ -1613,12 +1630,14 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         return ["backend gave no tool log: evidence cannot be verified"] if strict else []
     bash = [t for t in tool_log if t.get("tool") == "Bash"]
     ran = [norm(t.get("command", "")) for t in bash]
-    run_outputs = _squash(" ".join(t.get("output", "") for t in bash if not _is_text_search(t.get("command", ""))))
     errs = []
     for c in report["checks"]:
         if c["result"] in ("skipped", "unverified"):
             continue
         cmd = norm(c["command"])
+        # A call whose own command echoes the evidence (`echo "PASS: ..."`) only repeats the claim: never a backing.
+        honest = [t for t in bash if not _echoed(c["evidence"], t.get("command", ""))]
+        run_outputs = _squash(" ".join(t.get("output", "") for t in honest if not _is_text_search(t.get("command", ""))))
         # Only "claimed command is a substring of something really logged" counts. The reverse ("logged
         # command is a substring of the claim") is unsound: any real but trivial logged command (e.g. an
         # earlier `echo setup`) would then back ANY longer fabricated claim that happens to contain it
@@ -1626,7 +1645,7 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         matched = [t for t in bash if cmd and cmd in norm(t.get("command", ""))]
         by_command = bool(matched)
         if by_command:
-            own_output = _squash(" ".join(t.get("output", "") for t in matched))
+            own_output = _squash(" ".join(t.get("output", "") for t in matched if t in honest))
             if _evidence_in_output(c["evidence"], own_output):
                 continue
         # Batched-script case (seen live, T-0001): one script ran several scenarios, the check names the scenario's own
@@ -1639,7 +1658,11 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         if by_command and ev_len < MIN_EVIDENCE_CHARS:
             continue   # the command really ran; evidence is too short/generic to independently check either way
         shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"
-        if by_command:
+        if len(honest) < len(bash):
+            errs.append(f"check '{c['name']}': its evidence is only text that a command echoed itself (echo/printf), "
+                        f"which proves nothing about {', '.join(c['criterion_ids'])}: quote output that the check produced. "
+                        f"Claimed evidence: {c['evidence'][:160]!r}")
+        elif by_command:
             errs.append(f"check '{c['name']}': its command was really run, but the claimed evidence does not match that "
                         f"call's output (or any other logged output). Claimed evidence: {c['evidence'][:160]!r}")
         else:
@@ -1648,11 +1671,32 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
     return errs
 
 
+# A line that only summarises a run - a test count, or a build / install / server-start / exit status ("built in
+# 1.24s", "added 214 packages", "ready in 312 ms", "exit code 0"). It proves the suite or the build, never a behaviour.
 _AGGREGATE_LINE = re.compile(
-    r"^\s*(ran \d+ tests?( in [\d.]+ ?s)?|ok( \(.*\))?|passed|all tests passed|\d+ (tests? )?passed.*|tests?:?\s+\d+ passed.*"
-    r"|test files:?\s+\d+ passed.*|\d+ passing.*|=+ \d+ passed.*|test result: ok.*)\s*$", re.I)
+    r"^\s*(?:[✓✔√➜>$•*-]\s*)*("
+    r"ran \d+ tests?( in [\d.]+ ?s)?|ok( \(.*\))?|passed|all tests passed|\d+ (tests? )?passed.*|tests?:?\s+\d+ passed.*"
+    r"|test files:?\s+\d+ passed.*|\d+ passing.*|=+ \d+ passed.*|test result: ok.*"
+    r"|built in [\d.]+ ?m?s.*|\d+ modules? transformed.*|vite v[\d.]+\s+(building|ready in).*|(dist|build|out)/\S+\s+[\d.,]+ ?k?b.*"
+    r"|(webpack )?compiled successfully.*|build (succeeded|successful|complete[d]?|finished).*|done in [\d.]+ ?m?s.*"
+    r"|added \d+ packages?.*|audited \d+ packages?.*|found 0 vulnerabilities.*|up to date.*"
+    r"|local:\s*https?://\S+|network:\s*\S+|ready in [\d.]+ ?m?s.*|(server )?(listening|running) (on|at) .*|serving http on .*"
+    r"|(process )?exit(ed with)? code:? 0|exit status 0|0 errors?(,? 0 warnings?)?\.?)\s*$", re.I)
 _SUITE_CRITERION = re.compile(r"\b(test suite|all tests|the tests|unit tests|tests? (pass|run|complete)|type ?checks?|the build|"
-                              r"production build|lint)\b", re.I)
+                              r"production build|lint|(npm|pnpm|yarn) install|dependencies install)\b", re.I)
+# A criterion about what the user sees or does on screen. A text search of source never proves it, even when its wording
+# also matches _STATIC_CRITERION ("the first screen CONTAINS one primary button").
+_SCREEN_CRITERION = re.compile(r"\b(screens?|visible|shows?|displays?|appears?|focus\w*|clicks?|taps?|tapped|keyboard|"
+                               r"scroll\w*|renders?|viewport|offline)\b", re.I)
+_ECHO = re.compile(r"^\s*(echo|printf|write-output|write-host)\b", re.I)
+
+
+def _echoed(evidence: str, command: str) -> bool:
+    """The evidence is text that the shell itself echoed in this command (`echo "PASS: one primary action"`,
+    `npm run build && echo PASS`), not output that a program produced. A literal printed by a program after its own
+    assertion (`node -e "...assert(...); console.log('PASS')"`) is not an echo."""
+    segs = [s for s in re.split(r"&&|\|\||[;|\n]", command or "") if _ECHO.match(s)]
+    return bool(segs) and _evidence_in_output(evidence, _squash(" ".join(segs)))
 _TEXT_SEARCH = re.compile(r"^\s*(?:cd\s+\S+\s*(?:&&|;)\s*)*(grep|egrep|rg|findstr|select-string|cat|type|head|tail|ls|dir|find|wc|"
                           r"git\s+grep|git\s+show|git\s+diff)\b", re.I)
 _STATIC_CRITERION = re.compile(r"\b(files?|folders?|director(y|ies)|source|code|locale|strings?|imports?|depend\w*|package\w*|"
@@ -1694,9 +1738,10 @@ def evidence_quality_errors(report: dict, criteria: dict) -> list:
             if text is None or cid.startswith("C"):
                 continue
             if _is_aggregate(c["evidence"]) and not _SUITE_CRITERION.search(text):
-                errs.append(f"check '{c['name']}': an aggregate count ({c['evidence'][:60]!r}) does not prove {cid} "
-                            f"({text[:80]!r}): quote the output of the scenario that shows it")
-            elif _is_text_search(c["command"]) and not (_STATIC_CRITERION.search(text) or _SUITE_CRITERION.search(text)):
+                errs.append(f"check '{c['name']}': an aggregate count or build/status line ({c['evidence'][:60]!r}) does "
+                            f"not prove {cid} ({text[:80]!r}): quote the output of the scenario that shows it")
+            elif _is_text_search(c["command"]) and (_SCREEN_CRITERION.search(text) or not (
+                    _STATIC_CRITERION.search(text) or _SUITE_CRITERION.search(text))):
                 errs.append(f"check '{c['name']}': a text search or listing ({c['command'][:60]!r}) does not prove that "
                             f"{cid} works ({text[:80]!r}): run the behaviour and quote its output")
     return errs

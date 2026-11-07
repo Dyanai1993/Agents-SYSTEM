@@ -151,12 +151,14 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         return ["backend gave no tool log: evidence cannot be verified"] if strict else []
     bash = [t for t in tool_log if t.get("tool") == "Bash"]
     ran = [norm(t.get("command", "")) for t in bash]
-    run_outputs = _squash(" ".join(t.get("output", "") for t in bash if not _is_text_search(t.get("command", ""))))
     errs = []
     for c in report["checks"]:
         if c["result"] in ("skipped", "unverified"):
             continue
         cmd = norm(c["command"])
+        # A call whose own command echoes the evidence (`echo "PASS: ..."`) only repeats the claim: never a backing.
+        honest = [t for t in bash if not _echoed(c["evidence"], t.get("command", ""))]
+        run_outputs = _squash(" ".join(t.get("output", "") for t in honest if not _is_text_search(t.get("command", ""))))
         # Only "claimed command is a substring of something really logged" counts. The reverse ("logged
         # command is a substring of the claim") is unsound: any real but trivial logged command (e.g. an
         # earlier `echo setup`) would then back ANY longer fabricated claim that happens to contain it
@@ -164,7 +166,7 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         matched = [t for t in bash if cmd and cmd in norm(t.get("command", ""))]
         by_command = bool(matched)
         if by_command:
-            own_output = _squash(" ".join(t.get("output", "") for t in matched))
+            own_output = _squash(" ".join(t.get("output", "") for t in matched if t in honest))
             if _evidence_in_output(c["evidence"], own_output):
                 continue
         # Batched-script case (seen live, T-0001): one script ran several scenarios, the check names the scenario's own
@@ -177,7 +179,11 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
         if by_command and ev_len < MIN_EVIDENCE_CHARS:
             continue   # the command really ran; evidence is too short/generic to independently check either way
         shown = " || ".join(r[:80] for r in ran[:6]) or "no Bash commands"
-        if by_command:
+        if len(honest) < len(bash):
+            errs.append(f"check '{c['name']}': its evidence is only text that a command echoed itself (echo/printf), "
+                        f"which proves nothing about {', '.join(c['criterion_ids'])}: quote output that the check produced. "
+                        f"Claimed evidence: {c['evidence'][:160]!r}")
+        elif by_command:
             errs.append(f"check '{c['name']}': its command was really run, but the claimed evidence does not match that "
                         f"call's output (or any other logged output). Claimed evidence: {c['evidence'][:160]!r}")
         else:
@@ -186,11 +192,32 @@ def evidence_errors(report: dict, tool_log, strict: bool = None) -> list:
     return errs
 
 
+# A line that only summarises a run - a test count, or a build / install / server-start / exit status ("built in
+# 1.24s", "added 214 packages", "ready in 312 ms", "exit code 0"). It proves the suite or the build, never a behaviour.
 _AGGREGATE_LINE = re.compile(
-    r"^\s*(ran \d+ tests?( in [\d.]+ ?s)?|ok( \(.*\))?|passed|all tests passed|\d+ (tests? )?passed.*|tests?:?\s+\d+ passed.*"
-    r"|test files:?\s+\d+ passed.*|\d+ passing.*|=+ \d+ passed.*|test result: ok.*)\s*$", re.I)
+    r"^\s*(?:[✓✔√➜>$•*-]\s*)*("
+    r"ran \d+ tests?( in [\d.]+ ?s)?|ok( \(.*\))?|passed|all tests passed|\d+ (tests? )?passed.*|tests?:?\s+\d+ passed.*"
+    r"|test files:?\s+\d+ passed.*|\d+ passing.*|=+ \d+ passed.*|test result: ok.*"
+    r"|built in [\d.]+ ?m?s.*|\d+ modules? transformed.*|vite v[\d.]+\s+(building|ready in).*|(dist|build|out)/\S+\s+[\d.,]+ ?k?b.*"
+    r"|(webpack )?compiled successfully.*|build (succeeded|successful|complete[d]?|finished).*|done in [\d.]+ ?m?s.*"
+    r"|added \d+ packages?.*|audited \d+ packages?.*|found 0 vulnerabilities.*|up to date.*"
+    r"|local:\s*https?://\S+|network:\s*\S+|ready in [\d.]+ ?m?s.*|(server )?(listening|running) (on|at) .*|serving http on .*"
+    r"|(process )?exit(ed with)? code:? 0|exit status 0|0 errors?(,? 0 warnings?)?\.?)\s*$", re.I)
 _SUITE_CRITERION = re.compile(r"\b(test suite|all tests|the tests|unit tests|tests? (pass|run|complete)|type ?checks?|the build|"
-                              r"production build|lint)\b", re.I)
+                              r"production build|lint|(npm|pnpm|yarn) install|dependencies install)\b", re.I)
+# A criterion about what the user sees or does on screen. A text search of source never proves it, even when its wording
+# also matches _STATIC_CRITERION ("the first screen CONTAINS one primary button").
+_SCREEN_CRITERION = re.compile(r"\b(screens?|visible|shows?|displays?|appears?|focus\w*|clicks?|taps?|tapped|keyboard|"
+                               r"scroll\w*|renders?|viewport|offline)\b", re.I)
+_ECHO = re.compile(r"^\s*(echo|printf|write-output|write-host)\b", re.I)
+
+
+def _echoed(evidence: str, command: str) -> bool:
+    """The evidence is text that the shell itself echoed in this command (`echo "PASS: one primary action"`,
+    `npm run build && echo PASS`), not output that a program produced. A literal printed by a program after its own
+    assertion (`node -e "...assert(...); console.log('PASS')"`) is not an echo."""
+    segs = [s for s in re.split(r"&&|\|\||[;|\n]", command or "") if _ECHO.match(s)]
+    return bool(segs) and _evidence_in_output(evidence, _squash(" ".join(segs)))
 _TEXT_SEARCH = re.compile(r"^\s*(?:cd\s+\S+\s*(?:&&|;)\s*)*(grep|egrep|rg|findstr|select-string|cat|type|head|tail|ls|dir|find|wc|"
                           r"git\s+grep|git\s+show|git\s+diff)\b", re.I)
 _STATIC_CRITERION = re.compile(r"\b(files?|folders?|director(y|ies)|source|code|locale|strings?|imports?|depend\w*|package\w*|"
@@ -232,9 +259,10 @@ def evidence_quality_errors(report: dict, criteria: dict) -> list:
             if text is None or cid.startswith("C"):
                 continue
             if _is_aggregate(c["evidence"]) and not _SUITE_CRITERION.search(text):
-                errs.append(f"check '{c['name']}': an aggregate count ({c['evidence'][:60]!r}) does not prove {cid} "
-                            f"({text[:80]!r}): quote the output of the scenario that shows it")
-            elif _is_text_search(c["command"]) and not (_STATIC_CRITERION.search(text) or _SUITE_CRITERION.search(text)):
+                errs.append(f"check '{c['name']}': an aggregate count or build/status line ({c['evidence'][:60]!r}) does "
+                            f"not prove {cid} ({text[:80]!r}): quote the output of the scenario that shows it")
+            elif _is_text_search(c["command"]) and (_SCREEN_CRITERION.search(text) or not (
+                    _STATIC_CRITERION.search(text) or _SUITE_CRITERION.search(text))):
                 errs.append(f"check '{c['name']}': a text search or listing ({c['command'][:60]!r}) does not prove that "
                             f"{cid} works ({text[:80]!r}): run the behaviour and quote its output")
     return errs

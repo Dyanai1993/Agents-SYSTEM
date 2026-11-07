@@ -32,8 +32,9 @@ keywords: test, tests, testing, qa, vitest, jest, pytest, unittest, playwright
 3. Prove the check can fail: break the behaviour on purpose (or name the exact broken implementation it rejects) and
    see the check fail. A check that cannot fail proves nothing.
 4. Bind the result to its own run: the command you ran for THIS scenario and an excerpt of ITS output. Not evidence
-   for a criterion: an unrelated command, a grep of a test's name, an aggregate count ("Ran 42 tests, OK"), or a
-   file merely existing. Several scenarios may share one command when each has its own distinct line in the output.
+   for a criterion: an unrelated command, a grep of a test's name, an aggregate count ("Ran 42 tests, OK"), a build,
+   install or server-start line ("built in 1.24s", "ready in 312 ms"), text your own command echoed
+   (`npm run build && echo PASS`), or a file merely existing. Several scenarios may share one command when each has its own distinct line in the output.
 5. A genuine expected failure is valid evidence when the scenario is "this must fail" (exit code 1, an error message).
 6. Be honest about what was not performed: a phone install, a hosted HTTPS deployment, a visual judgement you did not
    make. Report those as not verified - never infer them (T-0026 counted `<link rel="manifest">` as proof the app
