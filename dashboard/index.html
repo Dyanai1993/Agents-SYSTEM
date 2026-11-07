@@ -21,7 +21,7 @@ input,select{background:var(--bg);color:var(--fg);border:1px solid var(--line);b
 details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
 </style></head><body>
 <header><h1>Agent Dashboard</h1>
-<nav><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="learning">Learning</button><button data-v="alerts">Alerts</button></nav>
+<nav><button data-v="assistant">New task</button><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="learning">Learning</button><button data-v="alerts">Alerts</button></nav>
 <span class="mut" id="stamp"></span></header>
 <main id="m"></main>
 <script>
@@ -33,8 +33,118 @@ const get=async u=>(await fetch(u)).json();
 const post=async(u,b)=>{const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json","X-Agentsys":"1"},body:JSON.stringify(b)});return {ok:r.ok,body:await r.json()};};
 const stCls=s=>["done"].includes(s)?"ok":["blocked","failed"].includes(s)?"bad":"";
 function bar(p){const b=el("div",{class:"bar"}),i=el("i");i.style.width=Math.min(100,Math.round(p*100))+"%";b.append(i);return b;}
+// Typed text survives the 2.5 s re-render: every text box is rebuilt from this map.
+const typed={},flash={};
+function box(key,ph,rows){const t=el("textarea",{rows:rows||3,placeholder:ph,style:"width:100%;font:inherit"});t.value=typed[key]||"";t.oninput=()=>{typed[key]=t.value;};return t;}
+function note(key){return flash[key]?el("div",{class:flash[key].cls},flash[key].text):"";}
+// ---------------- Requirements Assistant ("New task")
+let curDraft=null;const reviewOpen={};
+const FIELDS=[["goal","Goal",2],["acceptance_criteria","Acceptance criteria - one per line, each one checkable",5],["constraints","Constraints - one per line",3],["risks","Assumptions - one per line",3],["unknowns","Open questions - one per line; start a line with [BLOCKING] if it must be answered before submitting",3]];
+function toText(d,f){if(f==="goal")return d.goal;if(f==="unknowns")return d.unknowns.map(u=>(u.blocking?"[BLOCKING] ":"")+u.question).join("\n");return d[f].join("\n");}
+function fromText(f,v){if(f==="goal")return v.trim();const rows=v.split("\n").map(x=>x.trim()).filter(Boolean);
+  if(f==="unknowns")return rows.map(r=>/^\[blocking\]/i.test(r)?{question:r.replace(/^\[blocking\]\s*/i,""),blocking:true}:{question:r,blocking:false});return rows;}
+function dirtyKeys(sid){return FIELDS.map(([f])=>sid+":"+f).filter(k=>k in typed);}
+async function startDraft(){curDraft=null;view="assistant";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v==="assistant"));m.replaceChildren();tick();}
+function openDraft(id){curDraft=id;view="assistant";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v==="assistant"));m.replaceChildren();tick();}
+async function assistantView(){
+  const ss=await get("/api/assistant/sessions"),v=curDraft?await get("/api/assistant?id="+encodeURIComponent(curDraft)):null;
+  m.replaceChildren();
+  const top=el("div",{class:"card"},el("b",{},"Requirements Assistant"),el("span",{class:"mut"},"  describe what you want; the assistant asks what it needs and keeps the draft. Nothing is queued until you approve it."));
+  const nb=el("button",{style:"margin:6px 6px 0 0"},"Start a new request");nb.onclick=startDraft;top.append(el("div",{},nb));
+  const open=ss.sessions.filter(s=>s.status!=="submitted");
+  if(ss.sessions.length){const sel=el("select",{style:"margin-top:6px"});sel.append(el("option",{value:""},"Your drafts ("+open.length+" open)..."));
+    ss.sessions.slice().reverse().forEach(s=>{const o=el("option",{value:s.id},s.id+" - "+s.title.slice(0,60)+" ["+s.status+(s.task_id?" "+s.task_id:"")+"]");if(s.id===curDraft)o.selected=true;sel.append(o);});
+    sel.onchange=()=>{if(sel.value)openDraft(sel.value);};top.append(sel);}
+  m.append(top);
+  if(!v||v.error){
+    const c=el("div",{class:"card"},el("b",{},"What do you want built?"),el("div",{class:"mut"},"In your own words - Hebrew or English. You can paste a document too: it is treated as source material."));
+    const b=el("button",{style:"margin-top:6px"},"Send");
+    b.onclick=async()=>{const r=await post("/api/assistant/message",{text:typed["msg:new"]||""});if(r.ok){delete typed["msg:new"];curDraft=r.body.session;}else flash["msg:new"]={cls:"bad",text:r.body.error};tick();};
+    const t=box("msg:new","e.g. Make the audio lessons easier for a complete beginner, and let me stop playback anytime",5);t.setAttribute("dir","auto");
+    c.append(t,b,note("msg:new"));m.append(c);return;}
+  const sid=v.id,turn=v.turn||{},busy=["pending","running"].includes(turn.status),sub=v.submitted;
+  const wrap=el("div",{style:"display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start"});
+  // conversation
+  const conv=el("div",{class:"card",style:"flex:1 1 380px;min-width:0"},el("b",{},"Conversation"),el("span",{class:"mut"},"  "+sid));
+  v.conversation.forEach(x=>{
+    if(x.edit){conv.append(el("div",{class:"mut",style:"margin:4px 0",dir:"auto"},x.text));return;}
+    const b=el("div",{class:"msg",style:"margin:6px 0;"+(x.from==="user"?"":"border-color:var(--ok)")},el("b",{},x.from==="user"?"You":"Assistant"),el("div",{dir:"auto",style:"white-space:pre-wrap"},x.text));
+    if(x.suggestions&&x.suggestions.length)b.append(list("Proposals (not confirmed by you)",x.suggestions,"warn"));
+    if(x.conflicts&&x.conflicts.length)b.append(list("Conflicts",x.conflicts,"bad"));
+    if(x.draft_not_applied)b.append(el("div",{class:"warn"},"This answer was for an older version of the draft - your edit was kept and its proposal was not applied. Ask again if you want it."));
+    conv.append(b);});
+  if(turn.status==="pending")conv.append(el("div",{class:"warn"},"Waiting for the assistant. It answers while `python scripts/orch.py assistant` (or `run-next`) is running."));
+  if(turn.status==="running")conv.append(el("div",{class:"warn"},"The assistant is answering..."));
+  if(turn.status==="failed"){const rb=el("button",{style:"margin:4px 0"},"Retry");rb.onclick=async()=>{const r=await post("/api/assistant/retry",{session:sid});if(!r.ok)flash["msg:"+sid]={cls:"bad",text:r.body.error};tick();};
+    conv.append(el("div",{class:"bad"},"The assistant's turn failed: "+turn.error),rb);}
+  if(!sub){const t=box("msg:"+sid,busy?"Wait for the reply...":"Answer, correct, or add something...",3);t.setAttribute("dir","auto");if(busy)t.disabled=true;
+    const sb=el("button",{style:"margin-top:6px"},"Send");sb.disabled=busy;
+    sb.onclick=async()=>{const r=await post("/api/assistant/message",{session:sid,text:typed["msg:"+sid]||""});if(r.ok)delete typed["msg:"+sid];else flash["msg:"+sid]={cls:"bad",text:r.body.error};tick();};
+    conv.append(t,sb);}
+  conv.append(note("msg:"+sid));
+  // draft editor
+  const dc=el("div",{class:"card",style:"flex:1 1 380px;min-width:0"},el("b",{},"Requirement draft"),el("span",{class:"mut"},"  revision "+v.revision+(sub?" - submitted":"")));
+  const dirty=dirtyKeys(sid),base=typed["base:"+sid];
+  if(dirty.length&&base!==undefined&&base!==v.revision)dc.append(el("div",{class:"warn"},"The draft changed (revision "+v.revision+") while you were editing. Saving will be refused - copy your edits, then discard them."));
+  FIELDS.forEach(([f,label,rows])=>{const k=sid+":"+f;const t=el("textarea",{rows:rows,dir:"auto",style:"width:100%;font:inherit"});
+    t.value=k in typed?typed[k]:toText(v.draft,f);if(sub)t.disabled=true;
+    t.oninput=()=>{if(typed["base:"+sid]===undefined)typed["base:"+sid]=v.revision;typed[k]=t.value;};
+    dc.append(el("div",{style:"margin-top:6px"},el("b",{},label)),t);});
+  if(!sub){const save=el("button",{style:"margin:6px 6px 0 0"},"Save draft"),disc=el("button",{style:"margin:6px 6px 0 0"},"Discard my edits");
+    save.disabled=!dirty.length;disc.disabled=!dirty.length;
+    save.onclick=async()=>{const d={};FIELDS.forEach(([f])=>{const k=sid+":"+f;d[f]=fromText(f,k in typed?typed[k]:toText(v.draft,f));});
+      const r=await post("/api/assistant/draft",{session:sid,revision:typed["base:"+sid]??v.revision,draft:d});
+      if(r.ok){dirtyKeys(sid).forEach(k=>delete typed[k]);delete typed["base:"+sid];flash["d:"+sid]={cls:"ok",text:"Saved as revision "+r.body.revision+"."};}else flash["d:"+sid]={cls:"bad",text:r.body.error};tick();};
+    disc.onclick=()=>{dirtyKeys(sid).forEach(k=>delete typed[k]);delete typed["base:"+sid];tick();};
+    dc.append(save,disc);}
+  dc.append(note("d:"+sid));
+  if(v.suggestions.length)dc.append(list("Proposals in the draft (not confirmed by you)",v.suggestions,"warn"));
+  if(v.conflicts.length)dc.append(list("Conflicts to resolve",v.conflicts,"bad"));
+  // readiness and submission
+  const rd=el("div",{style:"margin-top:10px"});
+  if(sub){const go=el("button",{style:"margin-left:6px"},"Open task "+sub.task_id);go.onclick=()=>openTask(sub.task_id);
+    rd.append(el("div",{class:"ok"},"Approved revision "+sub.revision+" and queued it as "+sub.task_id+" (status: "+(v.task_status||"?")+")."),go,
+      el("div",{class:"mut"},"Start it with: python scripts/orch.py run-next. Questions during execution come back as needs_input."));}
+  else if(!v.ready)rd.append(list("What prevents submission",v.blockers,"bad"));
+  else if(dirty.length)rd.append(el("div",{class:"warn"},"Save your edits before submitting."));
+  else if(!reviewOpen[sid]){const rv=el("button",{},"Review and submit");rv.onclick=()=>{reviewOpen[sid]=v.revision;tick();};rd.append(el("div",{class:"ok"},"Ready to submit."),rv);}
+  else{const d=v.draft,ok=el("button",{style:"margin:6px 6px 0 0"},"Approve and submit revision "+v.revision),cancel=el("button",{style:"margin:6px 6px 0 0"},"Cancel");
+    const exact=el("div",{class:"msg",dir:"auto"},el("b",{},"This exact requirement is handed to the agents (revision "+v.revision+"):"),el("div",{style:"margin-top:4px"},el("b",{},"Goal: "),d.goal),
+      list("Acceptance criteria",d.acceptance_criteria),list("Constraints",d.constraints),list("Assumptions",d.risks),list("Open questions (none blocking)",d.unknowns.map(u=>u.question)));
+    if(reviewOpen[sid]!==v.revision){ok.disabled=true;exact.append(el("div",{class:"warn"},"The draft changed since you opened this review: review it again."));}
+    ok.onclick=async()=>{ok.disabled=true;const r=await post("/api/assistant/submit",{session:sid,revision:v.revision});if(!r.ok)flash["d:"+sid]={cls:"bad",text:r.body.error};delete reviewOpen[sid];tick();};
+    cancel.onclick=()=>{delete reviewOpen[sid];tick();};rd.append(exact,ok,cancel);}
+  dc.append(rd);
+  wrap.append(conv,dc);m.append(wrap);
+}
+function list(title,rows,cls){return el("div",{style:"margin-top:6px"},el("b",{},title),rows.length?el("ul",{style:"margin:2px 0"},...rows.map(r=>el("li",{class:cls||"",dir:"auto"},r))):el("div",{class:"mut"},"(none)"));}
+function requirementCard(t){
+  const q=t.requirement;if(!q||(!q.requirement&&!q.request))return "";
+  const c=el("div",{class:"card"+(q.phase?" alert":""),style:q.phase?"border-color:var(--warn)":""});
+  const approved=q.phase&&q.approval&&q.approval.status==="approved"&&q.status==="waiting_approval";
+  c.append(el("b",{},q.phase?"Requirement draft"+(approved?" - approved":" - waiting for you"):"Requirement"),
+    el("span",{class:"mut"},approved?"  building starts with the next python scripts/orch.py run-next":q.phase?"  nothing is built until you approve it":(q.origin?"  (approved by you in the Requirements Assistant, revision "+q.origin.revision+")":q.request?"  (approved by you)":"  (given directly)")));
+  if(q.origin){const o=el("button",{style:"margin-left:6px"},"Open the conversation");o.onclick=()=>openDraft(q.origin.draft_session);c.append(o);}
+  const r=q.requirement;
+  if(r){c.append(el("div",{style:"margin-top:6px"},el("b",{},"Goal: "),r.goal),list("Constraints",r.constraints),list("Acceptance criteria",r.acceptance_criteria),
+    list("Assumptions",r.risks,"warn"),
+    list("Open questions",r.unknowns.map(u=>(u.blocking?"[BLOCKING] ":"")+u.question),q.blocking.length?"bad":""));}
+  else c.append(el("div",{class:"mut",style:"margin-top:6px"},"The intake has not written a draft yet."+(q.status==="queued"?" Start it with: python scripts/orch.py run-next":"")));
+  const k="req:"+t.task_id,ap=q.approval;
+  if(q.phase&&ap&&ap.status==="pending"&&q.status==="waiting_approval"){
+    const ok=el("button",{style:"margin:6px 6px 0 0"},"Approve requirement"),no=el("button",{style:"margin:6px 6px 0 0"},"Reject (cancel task)");
+    if(q.blocking.length){ok.disabled=true;ok.title="Answer the blocking question first";}
+    ok.onclick=async()=>{const x=await post("/api/approval/decide",{id:ap.id,decision:"approved"});flash[k]=x.ok?{cls:"ok",text:"Approved. Run python scripts/orch.py run-next to start building."}:{cls:"bad",text:x.body.error};tick();};
+    no.onclick=async()=>{if(!confirm("Reject the requirement and cancel task "+t.task_id+"?"))return;const x=await post("/api/approval/decide",{id:ap.id,decision:"rejected"});if(!x.ok)flash[k]={cls:"bad",text:x.body.error};tick();};
+    c.append(el("div",{class:"mut",style:"margin-top:6px"},"To change it: python scripts/orch.py retry "+t.task_id+" --answer \"...\" (the draft then needs approval again)."),ok,no);}
+  c.append(note(k));
+  return c;}
 async function overview(){
-  const o=await get("/api/overview"),w=o.window;m.replaceChildren();
+  const o=await get("/api/overview"),w=o.window,ss=await get("/api/assistant/sessions");m.replaceChildren();
+  const nt=el("div",{class:"card"},el("b",{},"New task"),el("span",{class:"mut"},"  talk it through with the Requirements Assistant; nothing is queued until you approve the draft"));
+  const nb=el("button",{style:"margin:6px 6px 0 0"},"Start a new request");nb.onclick=startDraft;nt.append(el("div",{},nb));
+  ss.sessions.filter(s=>s.status!=="submitted").forEach(s=>{const a=el("div",{class:"alert",style:"cursor:pointer;border-color:"+(s.status==="assistant turn failed"?"var(--bad)":"var(--warn)")},el("b",{},s.id)," — ",el("span",{dir:"auto"},s.title)," ["+s.status+"]");a.onclick=()=>openDraft(s.id);nt.append(a);});
+  m.append(nt);
   if(o.bad_lines)m.append(el("div",{class:"card bad"},"Warning: "+o.bad_lines+" unreadable log lines skipped."));
   m.append(el("div",{class:"card"},el("b",{},"Usage window (estimate, not official)"),
     el("div",{},"5 hours: "+Math.round(w.share_5h*100)+"%"),bar(w.share_5h),el("div",{},"7 days: "+Math.round(w.share_7d*100)+"%"),bar(w.share_7d)));
@@ -98,6 +208,7 @@ async function task(){
   ctl.append(el("span",{class:"mut"},"  (writes a control file; the loop reads it before every agent call)"));
   m.append(flow);
   if(t.attention)m.append(el("div",{class:"card alert",style:t.attention.level==="warn"?"border-color:var(--warn)":""},el("b",{},"Needs you: "),t.attention.text));
+  m.append(requirementCard(t));
   m.append(ctl);
   // plan and dependencies
   const wk=el("div",{class:"card"},el("b",{},"Plan and dependencies"),el("span",{class:"mut"},"  last activity "+ago(t.idle_min)));
@@ -157,6 +268,7 @@ async function approvals(){
   if(!r.pending.length)c.append(el("div",{class:"mut"},"Nothing is waiting for you."));
   r.pending.forEach(a=>{
     const box=el("div",{class:"msg"},el("div",{},el("span",{class:"pill warn"},a.gate)," ",a.task_id+" — "+a.task_title+" ["+a.task_state+"]"),el("pre",{},a.context));
+    if(a.gate==="requirements"){const o=el("button",{style:"margin:6px 6px 0 0"},"Open the conversation");o.onclick=()=>openTask(a.task_id);box.append(o);}
     const note=el("input",{placeholder:"note (optional)"});
     [["approved","Approve"],["rejected","Reject"]].forEach(([d,l])=>{const b=el("button",{style:"margin:6px 6px 0 0"},l);b.onclick=async()=>{const x=await post("/api/approval/decide",{id:a.id,decision:d,note:note.value});if(!x.ok)alert(x.body.error);tick();};box.append(b);});
     box.append(note);c.append(box);});
@@ -203,8 +315,8 @@ async function learning(){
   r.eval_runs.forEach(x=>rt.append(el("tr",{},el("td",{},x.label+" ("+(x.ts||"").slice(0,16)+")"),el("td",{},x.passed+"/"+x.total),el("td",{},x.tokens),el("td",{},x.fix_loops))));
   m.append(el("div",{class:"card"},el("b",{},"Real eval runs"),r.eval_runs.length?rt:el("div",{class:"mut"},"None yet. Run `python evals/run_evals.py real --label baseline --yes`.")));
 }
-const views={overview,activity,messages,task,quality,approvals,usage,learning,alerts};
+const views={assistant:assistantView,overview,activity,messages,task,quality,approvals,usage,learning,alerts};
 async function tick(){try{const ap=await get("/api/approvals");const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view]();document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
-tick();setInterval(()=>{if(!document.querySelector("details[open]")&&!document.activeElement.matches?.("input"))tick();},2500);
+tick();setInterval(()=>{if(!document.querySelector("details[open]")&&!document.activeElement.matches?.("input,textarea"))tick();},2500);
 </script></body></html>

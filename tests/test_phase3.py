@@ -612,6 +612,22 @@ class DashboardActionTests(TmpHome):
         self.assertTrue(any(i["task_id"] == "t2" and i["level"] == "bad" for i in dd.alerts_view()["items"]))
 
 
+class DashboardPageTests(unittest.TestCase):
+    def test_the_page_script_parses(self):
+        """One syntax error in index.html blanks the WHOLE dashboard (seen while building the assistant UI)."""
+        import shutil, tempfile
+        from pathlib import Path
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed: cannot syntax-check the dashboard script here")
+        html = (Path(__file__).resolve().parent.parent / "dashboard" / "index.html").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as d:
+            js = Path(d) / "page.js"
+            js.write_text(html[html.index("<script>") + 8:html.rindex("</script>")], encoding="utf-8")
+            r = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[-800:])
+
+
 class DashboardServerHeaderTests(TmpHome):
     """Review (fourth round): server.py sent no frame-ancestors/X-Frame-Options, so the dashboard (which
     performs approval actions) could be embedded in an attacker's iframe for a clickjacking attack."""

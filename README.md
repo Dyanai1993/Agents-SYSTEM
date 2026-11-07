@@ -39,15 +39,35 @@ No need to install `make`: every target is one plain Python command.
 
 See `docs/architecture.md`.
 
-## Run a task end to end (Phase 3)
+## Start here: the Requirements Assistant
+Write what you want in your own words (Hebrew or English); the assistant asks what it needs, keeps an editable draft,
+and nothing is queued until you approve a revision. Run these on your own computer, each in its own terminal:
+```bash
+python dashboard/server.py 8765      # then open http://127.0.0.1:8765 -> "New task"
+python scripts/orch.py assistant     # answers your messages: one Haiku call per message, nothing while idle
+python scripts/orch.py run-next      # once you approved and submitted a draft: builds it (one step per run)
+```
+- The dashboard never calls a model: a message is saved as a turn request, and `orch.py assistant` (or `run-next`)
+  answers it. Refreshing the page costs nothing. A failed turn (bad output, usage limit) keeps your draft and waits
+  for you to press Retry - it is never retried on its own.
+- Edit the draft by hand any time; a late assistant reply never overwrites a newer edit (revision numbers).
+- "Review and submit" shows the exact requirement; "Approve and submit" queues ONE task with exactly that requirement
+  (a retry or double click returns the same task). It goes straight to the Architect: no intake, no requirement gate.
+- Drafts live in `drafts/D-####/session.json`, apart from tasks. Limits per session: the usual task caps (30 calls,
+  450k tokens), messages up to 8000 characters, the last 20 messages / 16000 characters sent to the model.
+
+## Run a task end to end (CLI)
 ```bash
 python scripts/orch.py submit T-0010 --request "A CLI that converts CSV to JSON, stdlib only" [--target-repo PATH]
-python scripts/orch.py run-next       # advances ONE task: intake -> plan -> build/test/fix -> merge gate
+python scripts/orch.py run-next       # intake writes a requirement DRAFT; the task waits for your approval
+python scripts/orch.py approve T-0010-requirements-1    # or the dashboard; `retry T-0010 --answer "..."` changes the draft
+python scripts/orch.py run-next       # plan -> build/test/fix -> final regression -> security -> merge gate
 python scripts/orch.py pending        # or use the dashboard: Approvals tab
 python scripts/orch.py approve T-0010-merge-1
 python scripts/orch.py run-next       # delivers patches (and branch agentsys/T-0010 in the target repo)
 python scripts/orch.py pause|stop|resume T-0010
 ```
+`submit --goal G --criteria C` gives a structured requirement directly and skips the requirement approval.
 Approving a merge never merges into `main` and never pushes: it writes patch files to `deliveries/<task>/` and, with `--target-repo`, creates a new branch there.
 
 ## Learning loop (Phase 4)

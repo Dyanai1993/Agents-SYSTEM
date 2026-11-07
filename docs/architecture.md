@@ -90,3 +90,23 @@ draft becomes `entry["requirements"]` and the build starts on the next `run-next
 draft needs approval again (the approval's `diff_ref` is the draft's hash). Approval with an open BLOCKING question is
 refused from the dashboard. Reject cancels the task. A structured `submit --goal/--criteria` needs no requirement approval.
 The Approvals list shows only the latest request per task and gate (an older one was superseded).
+
+## Requirements Assistant
+```
+ dashboard "New task"  --writes-->  drafts/D-####/session.json  (draft, revision, conversation, turn state)
+   message = one turn request (status pending)          hand edit = revision+1 (refused if stale)
+ orch.py assistant / run-next  --> assistant.process_next_turn() --> runner.run_agent("assistant", Haiku, no tools)
+   result applied only if the draft is still at the revision the turn started from; else kept, marked not applied
+   failure (invalid output, usage limit, backend error) -> turn "failed", draft untouched, explicit Retry only
+ "Approve and submit" (human) --> assistant.submit(revision): readiness (requirements schema + no blocking question)
+   -> journal (task id) -> orchestrator.submit(requirements=<exact draft>, origin={draft_session, revision})
+   -> idempotent: the same revision always returns the same task; an interrupted submission is finished by the retry
+```
+- Model calls happen only in the local execution layer, never in an HTTP handler. One agent call at a time across
+  processes: `queue/_exec.lock`, held by `run-next` and by each assistant turn (a turn waits while a task step runs).
+- The assistant (`.claude/agents/assistant.md`, `schemas/assistant_turn.schema.json`) may leave the draft incomplete;
+  readiness and submission are decided by code, and only a human action submits.
+- Session limits reuse the task ledger (`tasks/D-####/budget.json`, `logs/D-####.jsonl`); the overview lists only
+  folders with a `state.json`, so sessions never show as tasks.
+- After submission the draft is read-only (no post-submission editing in this version); the task's requirement card
+  links back to the conversation. Execution questions use the existing `needs_input` / `retry --answer` flow.

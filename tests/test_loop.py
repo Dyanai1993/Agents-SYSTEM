@@ -851,7 +851,7 @@ class SemanticsTests(unittest.TestCase):
 
 class PromptTests(TmpHome):
     def test_agent_files_match_config(self):
-        for role in ("architect", "developer", "tester", "security"):
+        for role in ("architect", "developer", "tester", "security", "assistant"):
             body, meta = prompts.load_role(role)
             self.assertEqual(meta["tools"], config.ROLES[role]["tools"], role)
             self.assertEqual(meta["model"], config.ROLES[role]["model"], role)
@@ -860,7 +860,7 @@ class PromptTests(TmpHome):
 
     def test_examples_inside_prompts_validate_against_schemas(self):
         """The JSON examples in the prompts must be valid replies. Keeps prompts and schemas in sync."""
-        for role, name in (("architect", "plan"), ("developer", "dev_report"), ("tester", "test_report"), ("security", "security_report")):
+        for role, name in (("architect", "plan"), ("developer", "dev_report"), ("tester", "test_report"), ("security", "security_report"), ("assistant", "assistant_turn")):
             body = prompts.load_role(role)[0]
             blocks = re.findall(r"```\n(\{.*?\})\n```", body, re.S)
             self.assertTrue(blocks, role)

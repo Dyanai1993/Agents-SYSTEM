@@ -114,7 +114,8 @@ def overview(now=None):
     rows = []
     if tasks_dir.is_dir():
         for d in sorted(tasks_dir.iterdir()):
-            if not d.is_dir() or not logger.TASK_ID_RE.match(d.name):
+            # a task has a state.json; an assistant session (D-####) or a smoke run only keeps a budget/log there
+            if not d.is_dir() or not logger.TASK_ID_RE.match(d.name) or not (d / "state.json").exists():
                 continue
             st, bud = _json(d / "state.json") or {}, _json(d / "budget.json") or {}
             t = _epoch(last.get(d.name) or st.get("updated_at"))
@@ -240,7 +241,7 @@ def requirement_view(task_id):
     phase = entry.get("requirements") is None and bool(entry.get("request_text"))
     ap, st = approvals.latest(task_id, "requirements")
     draft = intake.draft(task_id)
-    return {"phase": phase, "status": entry.get("status"), "request": entry.get("request_text"),
+    return {"phase": phase, "status": entry.get("status"), "request": entry.get("request_text"), "origin": entry.get("origin"),
             "requirement": draft if phase or draft else entry.get("requirements"),
             "blocking": intake.blocking_questions(draft) if phase else [],
             "approval": {"id": ap["id"], "status": st} if ap else None}
@@ -357,3 +358,23 @@ def learning_view():
     return {"inbox": len(memory.inbox_lessons()), "need_for_review": config.REVIEW_MIN_LESSONS,
             "lessons": lessons_md.read_text(encoding="utf-8").splitlines()[2:] if lessons_md.exists() else [],
             "proposals": props[::-1], "eval_runs": results[::-1], "comparison": comparison}
+
+
+def assistant_sessions():
+    from . import assistant
+    out = []
+    for sid in assistant.session_ids():
+        try:
+            out.append(assistant.summary(assistant.load(sid)))
+        except (OSError, ValueError, KeyError):
+            continue
+    return {"sessions": out}
+
+
+def assistant_view(sid):
+    """One draft session as the dashboard shows it: conversation, draft, revision, what blocks submission."""
+    from . import assistant
+    try:
+        return assistant.view(sid)
+    except (KeyError, ValueError):
+        return None

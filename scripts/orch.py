@@ -2,7 +2,8 @@
 
   python scripts/orch.py submit T-0010 --request "Make a CLI that ..." [--target-repo PATH]
   python scripts/orch.py submit T-0010 --goal G --criteria C [--criteria C2] [--constraint X]
-  python scripts/orch.py run-next [--backend cli]     advances ONE task (sequential)
+  python scripts/orch.py run-next [--backend cli]     answers ONE pending assistant message, or else advances ONE task
+  python scripts/orch.py assistant                    keeps answering Requirements Assistant messages (Ctrl+C stops)
   python scripts/orch.py status
   python scripts/orch.py pending | approve ID [--note N] | reject ID [--note N]
   python scripts/orch.py pause|stop|resume TASK_ID
@@ -13,7 +14,7 @@
 import argparse, json, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from agentsys import approvals, billing_guard, control, learning, memory, orchestrator, runner, scheduler  # noqa: E402
+from agentsys import approvals, assistant, billing_guard, control, learning, memory, orchestrator, runner, scheduler  # noqa: E402
 
 ap = argparse.ArgumentParser()
 sub = ap.add_subparsers(dest="cmd", required=True)
@@ -21,6 +22,7 @@ s = sub.add_parser("submit"); s.add_argument("task_id"); s.add_argument("--reque
 s.add_argument("--criteria", action="append", default=[]); s.add_argument("--constraint", action="append", default=[])
 s.add_argument("--target-repo"); s.add_argument("--priority", type=int, default=5)
 r = sub.add_parser("run-next"); r.add_argument("--backend", default="cli", choices=["cli"])   # sdk builds no tool log
+x = sub.add_parser("assistant"); x.add_argument("--backend", default="cli", choices=["cli"])
 sub.add_parser("status"); sub.add_parser("pending")
 for n in ("approve", "reject"):
     x = sub.add_parser(n); x.add_argument("id"); x.add_argument("--note", default="")
@@ -46,7 +48,29 @@ elif a.cmd == "run-next":
     except billing_guard.BillingGuardError as e:
         print(e, file=sys.stderr); sys.exit(2)
     out = scheduler.run_next(backend=runner.get_backend(a.backend))
-    print("nothing to run" if out is None else json.dumps({k: out.get(k) for k in ("task_id", "status", "note", "skipped")}, indent=2))
+    if out is not None and "assistant_turn" in out:
+        print("assistant:", json.dumps(out["assistant_turn"]))
+    else:
+        print("nothing to run" if out is None else json.dumps({k: out.get(k) for k in ("task_id", "status", "note", "skipped")}, indent=2))
+elif a.cmd == "assistant":
+    import time
+    try:
+        billing_guard.run_guard()
+    except billing_guard.BillingGuardError as e:
+        print(e, file=sys.stderr); sys.exit(2)
+    print("Requirements Assistant: answering dashboard messages, one model call per message. Ctrl+C stops.")
+    print("Tasks are NOT started here: start them with `python scripts/orch.py run-next`.")
+    try:
+        while True:
+            out = assistant.process_next_turn(backend=runner.get_backend(a.backend))
+            if out is None or "skipped" in out:
+                time.sleep(2)                     # idle: no call is made until a message is waiting
+                continue
+            print(time.strftime("%H:%M:%S"), json.dumps(out))
+    except billing_guard.BillingGuardError as e:
+        print(e, file=sys.stderr); sys.exit(2)
+    except KeyboardInterrupt:
+        print("stopped")
 elif a.cmd == "status":
     for e in scheduler.entries():
         print(f"{e['task_id']:<12} {e['status']:<17} {e['title'][:50]}  {e['note'][:80]}")

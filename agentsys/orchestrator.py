@@ -60,7 +60,7 @@ def save_entry(entry):
     tmp.replace(p)
 
 
-def submit(task_id, *, request_text=None, requirements=None, title=None, target_repo=None, priority=5):
+def submit(task_id, *, request_text=None, requirements=None, title=None, target_repo=None, priority=5, origin=None):
     logger.safe_task_id(task_id)
     if load_entry(task_id):
         raise ValueError(f"task {task_id} already exists")
@@ -70,7 +70,8 @@ def submit(task_id, *, request_text=None, requirements=None, title=None, target_
         schema.validate("requirements", requirements)
     entry = {"task_id": task_id, "title": title or tasks.short_title((requirements or {}).get("goal") or request_text), "status": "queued",
              "priority": priority, "created_at": logger.now(), "request_text": request_text, "requirements": requirements,
-             "target_repo": str(target_repo) if target_repo else None, "resume_after": None, "note": ""}
+             "target_repo": str(target_repo) if target_repo else None, "resume_after": None, "note": "",
+             "origin": origin}                 # e.g. {"draft_session": "D-0001", "revision": 3}: the Requirements Assistant
     save_entry(entry)
     tasks.set_state(task_id, "intake", title=entry["title"])
     logger.log_event(task_id, "orchestrator", "state_change", "task queued", status="ok")

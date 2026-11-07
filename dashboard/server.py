@@ -55,6 +55,11 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, d.learning_view())
             if u.path == "/api/alerts":
                 return self._send(200, d.alerts_view())
+            if u.path == "/api/assistant/sessions":
+                return self._send(200, d.assistant_sessions())
+            if u.path == "/api/assistant":
+                v = d.assistant_view(q.get("id", ""))
+                return self._send(200 if v else 404, v or {"error": "not found"})
             if u.path == "/api/payload":
                 p = d.payload(q.get("ref", ""))
                 return self._send(200 if p is not None else 404, p if p is not None else {"error": "not found"})

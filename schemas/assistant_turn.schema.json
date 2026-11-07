@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "assistant_turn.schema.json",
+  "title": "Requirements Assistant turn",
+  "description": "One reply of the Requirements Assistant. The draft may be incomplete during the conversation; the server validates the final requirement against requirements.schema.json before any submission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reply", "draft", "suggestions", "conflicts"],
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S"},
+    "draft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal", "constraints", "acceptance_criteria", "risks", "unknowns"],
+      "properties": {
+        "goal": {"type": "string", "maxLength": 1000},
+        "constraints": {"type": "array", "maxItems": 30, "items": {"$ref": "#/$defs/text"}},
+        "acceptance_criteria": {"type": "array", "maxItems": 30, "items": {"$ref": "#/$defs/text"}},
+        "risks": {"type": "array", "maxItems": 30, "items": {"$ref": "#/$defs/text"}},
+        "unknowns": {
+          "type": "array",
+          "maxItems": 15,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["question", "blocking"],
+            "properties": {"question": {"$ref": "#/$defs/text"}, "blocking": {"type": "boolean"}}
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "reply": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S",
+              "description": "The message to the user, in the user's language. At most one focused question."},
+    "draft": {"$ref": "#/$defs/draft"},
+    "suggestions": {"type": "array", "maxItems": 15, "items": {"$ref": "#/$defs/text"},
+                    "description": "Defaults the assistant PROPOSED and the user has not confirmed yet."},
+    "conflicts": {"type": "array", "maxItems": 15, "items": {"$ref": "#/$defs/text"},
+                  "description": "Contradictions between the user's decisions."}
+  }
+}

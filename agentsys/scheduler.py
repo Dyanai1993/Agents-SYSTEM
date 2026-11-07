@@ -1,7 +1,8 @@
 """Usage-aware scheduler. Sequential: run_next() advances exactly ONE task. Parallel runs need explicit approval (not built)."""
 import time
 
-from . import approvals, config, control, ledger, orchestrator
+from . import approvals, assistant, config, control, ledger, orchestrator
+from .filelock import LockBusy
 
 TERMINAL = {"done", "rejected", "stopped"}
 NEEDS_HUMAN = {"needs_input", "needs_approval", "blocked"}
@@ -42,7 +43,25 @@ def pick(now=None):
 
 
 def run_next(*, backend, env=None, settings_paths=None, now=None, estimate_items=3):
-    """Return None (nothing to do), {'skipped': reason, 'task_id'} or the updated entry."""
+    """Return None (nothing to do), {'skipped': reason}, {'assistant_turn': result} or the updated task entry.
+
+    One agent call at a time across processes (run-next, `orch.py assistant`): the sequential policy. A waiting
+    Requirements Assistant message is answered first - one cheap call the human is waiting for."""
+    lock = assistant.exec_lock()
+    try:
+        lock.__enter__()
+    except LockBusy:
+        return {"skipped": "another agent call is running (one at a time)"}
+    try:
+        turn = assistant.process_next_turn(backend=backend, env=env, settings_paths=settings_paths, locked=True)
+        if turn is not None:
+            return {"assistant_turn": turn}
+        return _run_next_task(backend=backend, env=env, settings_paths=settings_paths, now=now, estimate_items=estimate_items)
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _run_next_task(*, backend, env, settings_paths, now, estimate_items):
     e = pick(now)
     if e is None:
         return None

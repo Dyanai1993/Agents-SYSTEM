@@ -1,5 +1,8 @@
-"""The ONLY write actions of the dashboard: approval decisions and pause/stop/resume. No LLM: every action writes
-files, and model calls happen only when `orch.py run-next` runs (billing guard, caps).
+"""The ONLY write actions of the dashboard. No LLM: every action writes files, and model calls happen only in the
+local execution layer (`orch.py run-next` / `orch.py assistant`: billing guard, caps).
+  - approval decisions, and pause/stop/resume
+  - Requirements Assistant: a message (= one turn request), a hand edit of the draft, a retry of a failed turn,
+    and the approval of a draft revision - the only action that queues a task
 
 Local-only protections: the server binds to 127.0.0.1; every POST must carry the custom header
 `X-Agentsys: 1` (browsers cannot send it cross-site without a CORS preflight, which is refused),
@@ -8,7 +11,7 @@ a JSON body, and a Host/Origin that is localhost.
 import json
 from urllib.parse import urlparse
 
-from . import approvals, config, control, intake, logger, orchestrator, schema
+from . import approvals, assistant, config, control, intake, logger, orchestrator, schema
 
 
 def _host_ok(value):
@@ -50,9 +53,46 @@ def handle_post(path, body, headers):
             if body.get("action") not in ("pause", "stop", "resume"):
                 return 400, {"error": "action must be pause, stop or resume"}
             return 200, control.set_control(str(body.get("task_id", "")), body["action"])
+        if path.startswith("/api/assistant/"):
+            return _assistant(path, body)
     except (approvals.ApprovalError, ValueError, schema.SchemaError) as e:
         return 400, {"error": str(e)[:200]}
     return 404, {"error": "not found"}
+
+
+def _assistant(path, body):
+    sid = body.get("session")
+    sid = None if sid in (None, "") else str(sid)
+    try:
+        if path == "/api/assistant/message":
+            s = assistant.post_message(sid, body.get("text"))
+            return 200, {"session": s["id"], "status": s["turn"]["status"]}
+        if sid is None:
+            return 400, {"error": "session is required"}
+        if path == "/api/assistant/draft":
+            s = assistant.save_draft(sid, _int(body.get("revision")), body.get("draft"))
+            return 200, {"session": sid, "revision": s["revision"]}
+        if path == "/api/assistant/retry":
+            s = assistant.retry_turn(sid)
+            return 200, {"session": sid, "status": s["turn"]["status"]}
+        if path == "/api/assistant/submit":
+            task_id, new = assistant.submit(sid, _int(body.get("revision")))
+            return 200, {"session": sid, "task_id": task_id, "new": new}
+    except assistant.Conflict as e:
+        return 409, {"error": str(e)[:300]}
+    except KeyError:
+        return 400, {"error": "no such draft session"}
+    except (ValueError, TypeError, schema.SchemaError) as e:
+        return 400, {"error": str(e)[:400]}
+    except Exception as e:                       # e.g. an interrupted submission: the retry finishes it
+        return 500, {"error": f"{type(e).__name__}: {str(e)[:200]} - your draft is saved; try again"}
+    return 404, {"error": "not found"}
+
+
+def _int(v):
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ValueError("revision must be a number")
+    return v
 
 
 def _requirement_not_approvable(approval_id):
