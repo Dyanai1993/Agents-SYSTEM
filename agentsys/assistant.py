@@ -293,6 +293,15 @@ def process_next_turn(*, backend, env=None, settings_paths=None, now=None, locke
         lock.__exit__(None, None, None)
 
 
+def _known_fields(out):
+    """Only the fields the draft has. Seen live: a whole turn failed because the model added 'conversation_note'
+    inside the draft; the schema now lets extra fields through and they are dropped here, never reaching the draft."""
+    d = out["draft"]
+    draft = {k: d[k] for k in EMPTY_DRAFT if k in d}
+    draft["unknowns"] = [{"question": u["question"], "blocking": u["blocking"]} for u in d.get("unknowns", [])]
+    return {"reply": out["reply"], "draft": draft, "suggestions": out["suggestions"], "conflicts": out["conflicts"]}
+
+
 def _run_turn(sid, backend, env, settings_paths):
     with _Locked(sid):
         s = load(sid)
@@ -325,7 +334,7 @@ def _run_turn(sid, backend, env, settings_paths):
     if not res.ok:
         _fail(sid, turn_id, f"the assistant's answer could not be used ({res.error[:200]}). Your draft is unchanged. Press Retry")
         return {"session": sid, "status": "failed", "reason": "invalid output"}
-    out = res.output
+    out = _known_fields(res.output)
     with _Locked(sid):
         s = load(sid)
         msg = {"from": "assistant", "ts": logger.now(), "text": out["reply"], "turn": turn_id,

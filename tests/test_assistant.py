@@ -56,6 +56,19 @@ class AssistantTests(TmpHome):
         v = dd.assistant_view(sid)
         self.assertTrue(v["ready"]); self.assertIn("On resume, playback restarts the current sentence", v["draft"]["acceptance_criteria"])
 
+    def test_an_extra_field_the_model_invents_is_dropped_not_a_failed_turn(self):
+        """Seen live (D-0006): 'conversation_note' inside the draft failed the whole turn on the strict schema."""
+        sid = self.start()
+        t = turn(**GOOD)
+        t["draft"]["conversation_note"] = "the user confirmed"
+        t["draft"]["unknowns"] = [{"question": "Which voice?", "blocking": False, "why": "extra"}]
+        t["mood"] = "extra at the top too"
+        r = work(runner.FakeBackend({"assistant": t}))
+        self.assertEqual(r["status"], "done", r)
+        s = assistant.load(sid)
+        self.assertNotIn("conversation_note", s["draft"]); self.assertEqual(s["draft"]["goal"], GOOD["goal"])
+        self.assertEqual(s["draft"]["unknowns"], [{"question": "Which voice?", "blocking": False}])
+
     def test_refreshing_costs_nothing_and_one_message_is_one_turn(self):
         sid = self.start()
         fb = runner.FakeBackend({"assistant": turn("hi")})
