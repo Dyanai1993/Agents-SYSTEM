@@ -280,7 +280,8 @@ function requirementCard(t){
   c.append(note(k));
   return c;}
 async function overview(){
-  const o=await get("/api/overview"),w=o.window,ss=await get("/api/assistant/sessions");m.replaceChildren();
+  const o=await get("/api/overview"),w=o.window,ss=await get("/api/assistant/sessions"),now=await nowRunningCard();m.replaceChildren();
+  if(now){m.append(now);const tv=now.querySelector(".term");tv.scrollTop=tv.scrollHeight;}
   const nt=el("div",{class:"card"},el("b",{},"New task"),el("span",{class:"mut"},"  talk it through with the Requirements Assistant; nothing is queued until you approve the draft"));
   const nb=el("button",{class:"primary",style:"margin:8px 6px 0 0"},"Start a new request");nb.onclick=startDraft;nt.append(el("div",{},nb));
   ss.sessions.filter(s=>s.status!=="submitted").forEach(s=>{const a=el("div",{class:"alert",style:"cursor:pointer;border-color:"+(s.status==="assistant turn failed"?"var(--bad)":"var(--warn)")},el("b",{},s.id)," — ",el("span",{dir:"auto"},s.title)," ["+s.status+"]");a.onclick=()=>openDraft(s.id);nt.append(a);});
@@ -350,13 +351,9 @@ function pipelineCard(t){
   c.append(pipe);
   if(!planned&&!items.length)c.append(el("div",{class:"mut small",style:"margin-top:6px"},"The work items appear here once the Architect's plan is accepted."));
   return c;}
-// Live terminal: what the agents are doing, line by line, while the call runs (tasks/<id>/live.jsonl, written by the runner).
-function liveCard(t){
-  const lines=t.live||[],r=t.run||{};if(!lines.length&&!r.running)return null;
-  const p=liveJob(t.task_id),c=el("div",{class:"card"},el("b",{},"Live activity"));
-  if(p)c.append(el("span",{class:"livechip"},el("i",{"aria-hidden":"true"}),(p.job.agent||"working")+" - ",el("span",{"data-since":p.job.since},dur(Date.now()/1000-p.job.since))));
-  else if(lines.length)c.append(el("span",{class:"livechip",style:"color:var(--mut)"},"not running - last line "+ago((Date.now()-new Date(lines[lines.length-1].ts))/60000)));
-  const term=el("div",{class:"term",role:"log","aria-live":"polite","aria-label":"Live agent activity","data-task":t.task_id,"data-n":String(lines.length)+(lines.length?lines[lines.length-1].ts:"")});
+// The terminal itself: one line per streamed step. Shared by the Task monitor and the Overview's "Now running" card.
+function termView(lines,taskId,extra){
+  const term=el("div",{class:"term",role:"log","aria-live":"polite","aria-label":"Live agent activity","data-task":taskId,"data-n":String(lines.length)+(lines.length?lines[lines.length-1].ts:""),style:extra||""});
   const tm=ts=>{const d=new Date(ts);return isNaN(d)?"":d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"});};
   const icon={Bash:"$",Edit:"✎",Write:"✎",Read:"›",Grep:"⌕",Glob:"⌕"};
   lines.forEach(x=>{const row=el("div",{},el("span",{class:"t"},tm(x.ts)+"  "));
@@ -367,7 +364,23 @@ function liveCard(t){
     else if(x.kind==="say")row.append("  ",el("span",{class:"say",dir:"auto"},x.text||""));
     term.append(row);});
   if(!lines.length)term.append(el("div",{class:"t"},"Waiting for the first agent step..."));
-  c.append(term,el("div",{class:"mut small",style:"margin-top:4px"},"Commands and files the agents use, as they happen. Tool output is not shown here (only ok / error); the full log is in the Activity tab."));
+  return term;}
+// Overview: whatever runs right now, on the first screen (seen live: the Task monitor's panel was below the fold).
+async function nowRunningCard(){
+  const p=(workerState.processes||[]).find(x=>x.alive&&x.job&&x.job.kind==="task");if(!p)return null;
+  const id=p.job.id,t=await get("/api/task?id="+encodeURIComponent(id)),lv={lines:(t.live||[]).slice(-10)};
+  const open=el("button",{class:"primary small",style:"margin-left:10px"},"Open "+id);open.onclick=()=>openTask(id);
+  const c=el("div",{class:"card"},el("b",{},"Now running: "+id),el("span",{class:"livechip"},el("i",{"aria-hidden":"true"}),(p.job.agent||p.job.state||"working")+" - ",
+    el("span",{"data-since":p.job.since},dur(Date.now()/1000-p.job.since))),open);
+  c.append(termView(lv.lines||[],id,"max-height:240px;min-height:60px"));
+  return c;}
+// Live terminal: what the agents are doing, line by line, while the call runs (tasks/<id>/live.jsonl, written by the runner).
+function liveCard(t){
+  const lines=t.live||[],r=t.run||{};if(!lines.length&&!r.running)return null;
+  const p=liveJob(t.task_id),c=el("div",{class:"card"},el("b",{},"Live activity"));
+  if(p)c.append(el("span",{class:"livechip"},el("i",{"aria-hidden":"true"}),(p.job.agent||"working")+" - ",el("span",{"data-since":p.job.since},dur(Date.now()/1000-p.job.since))));
+  else if(lines.length)c.append(el("span",{class:"livechip",style:"color:var(--mut)"},"not running - last line "+ago((Date.now()-new Date(lines[lines.length-1].ts))/60000)));
+  c.append(termView(lines,t.task_id),el("div",{class:"mut small",style:"margin-top:4px"},"Commands and files the agents use, as they happen. Tool output is not shown here (only ok / error); the full log is in the Activity tab."));
   return c;}
 // The run card: what is happening right now and the ONE next action (Start / Continue / Resume / Retry / Answer /
 // Approvals). Every action only writes a request file; the worker does the work. The dashboard never calls a model.
