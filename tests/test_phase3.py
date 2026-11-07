@@ -439,6 +439,78 @@ class SchedulerTests(TmpHome):
         self.assertIsNone(scheduler.pick())
 
 
+class DashboardMonitorTests(TmpHome):
+    """The monitoring views: what needs a human, plan dependencies, cost. Read-only, files only."""
+
+    def task(self, tid, state, event_age_min=None, queue=None, waiting=False):
+        d = self.home / "tasks" / tid; d.mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps({"task_id": tid, "title": tid, "state": state, "current_agent": None,
+                                                  "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+                                                  "waiting_approval": waiting}))
+        if event_age_min is not None:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - event_age_min * 60))
+            (self.home / "logs").mkdir(exist_ok=True)
+            with open(self.home / "logs" / f"{tid}.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": ts, "task_id": tid, "agent": "developer", "event_type": "agent_start",
+                                    "summary": "developer starts", "status": "ok"}) + "\n")
+        if queue:
+            (self.home / "queue").mkdir(exist_ok=True)
+            (self.home / "queue" / f"{tid}.json").write_text(json.dumps(dict({"task_id": tid}, **queue)))
+        return d
+
+    def attention(self, tid):
+        return {r["task_id"]: r["attention"] for r in dd.overview()["tasks"]}[tid]
+
+    def test_a_silent_active_task_is_flagged_as_stuck(self):
+        self.task("t-old", "build", event_age_min=dd.STUCK_MIN + 5)
+        self.task("t-new", "build", event_age_min=2)
+        self.task("t-done", "done", event_age_min=600)
+        a = self.attention("t-old")
+        self.assertEqual(a["level"], "bad"); self.assertIn("stuck", a["text"]); self.assertIn("run-next", a["text"])
+        self.assertIsNone(self.attention("t-new")); self.assertIsNone(self.attention("t-done"))
+        self.assertTrue(any(i["task_id"] == "t-old" and "stuck" in i["text"] for i in dd.alerts_view()["items"]))
+
+    def test_the_reason_a_task_stopped_is_shown(self):
+        self.task("t-b", "blocked", event_age_min=1, queue={"status": "blocked", "note": "delivery failed: target repo is dirty"})
+        self.task("t-q", "blocked", event_age_min=1, queue={"status": "needs_input", "note": "Which database?"})
+        self.task("t-p", "paused", event_age_min=1, queue={"status": "paused", "note": "usage limit", "resume_after": time.time() + 3600})
+        self.task("t-a", "review", event_age_min=1, waiting=True)
+        self.assertIn("target repo is dirty", self.attention("t-b")["text"])
+        self.assertEqual(self.attention("t-q"), {"level": "warn", "text": "needs_input: Which database?"})
+        self.assertIn("paused until about", self.attention("t-p")["text"])
+        self.assertEqual(self.attention("t-a")["text"], "waiting for your approval")
+        d = self.task("t-t", "blocked", event_age_min=1)
+        (d / "workspace_tainted.json").write_text(json.dumps({"role": "security", "head": "a" * 40}))
+        self.assertIn("could NOT be reverted", self.attention("t-t")["text"])
+        self.assertEqual(dd.task_detail("t-t")["tainted"]["role"], "security")
+
+    def test_work_items_show_dependencies_and_where_the_task_stands(self):
+        p = plan(3)                                    # W2 depends on W1, W3 on W2
+        prog = {"completed": {"W1": loop._item_hash(p["work_items"][0])}, "item": 1, "step": "test", "fix": 0,
+                "final_done": False, "security_done": False}
+        w = dd.work_items(p, prog, "test")
+        self.assertEqual([(i["id"], i["status"]) for i in w["items"]],
+                         [("W1", "done"), ("W2", "in progress: test"), ("W3", "waiting for W2")])
+        self.assertEqual(w["items"][2]["depends_on"], ["W2"])
+        self.assertEqual([s["status"] for s in w["steps"]], ["after all items", "after the final regression"])
+        prog2 = dict(prog, step="dev", fix=2)
+        self.assertEqual(dd.work_items(p, prog2, "blocked")["items"][1]["status"], "stopped at fix 2")
+        # a re-planned item (same id, changed content) is not done any more
+        p3 = plan(3); p3["work_items"][0]["title"] = "changed by a re-plan"
+        self.assertEqual(dd.work_items(p3, prog, "build")["items"][0]["status"], "in progress: test")
+
+    def test_cost_per_agent_adds_up_to_the_task_total(self):
+        orchestrator.submit("t1", requirements=REQ)
+        self.assertEqual(proc("t1", fb())["status"], "waiting_approval")
+        t = dd.task_detail("t1")
+        c = t["costs"]
+        self.assertEqual(sum(c["tokens_by_agent"].values()), c["tokens_total"])
+        self.assertEqual(sum(c["tokens_by_model"].values()), c["tokens_total"])
+        self.assertEqual(set(c["calls_by_agent"]), {"architect", "developer", "tester", "security"})
+        self.assertEqual([s["status"] for s in t["work"]["steps"]], ["done", "done"])
+        self.assertEqual(t["security"]["verdict"], "pass")
+
+
 class DashboardActionTests(TmpHome):
     H = {"Host": "127.0.0.1:8765", "Content-Type": "application/json", "X-Agentsys": "1"}
 

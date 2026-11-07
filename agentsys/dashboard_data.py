@@ -47,14 +47,68 @@ def all_events(task=None):
     return events, bad
 
 
-def overview():
+ACTIVE_STATES = {"intake", "plan", "build", "test", "fix", "security"}
+# Longer than any single agent call may take (the longest role limit) plus a margin: past this, an "active"
+# task with no new event is not working - its run most likely stopped (crashed, killed, laptop asleep).
+STUCK_MIN = max(lim["timeout_s"] for lim in config.ROLE_LIMITS.values()) // 60 + 10
+
+
+def _epoch(ts):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _attention(task_id, d, st, idle_min):
+    """What needs a human for this task, as (level, text), or None. Read-only: files only, no lock probing."""
+    entry = _json(config.home() / "queue" / f"{task_id}.json") or {}
+    state, status, note = st.get("state"), entry.get("status"), (entry.get("note") or "")[:300]
+    if (d / "workspace_tainted.json").exists():
+        return "bad", "an agent's changes could NOT be reverted: restore the workspace before anything else runs (see the task's alert)"
+    if st.get("waiting_approval"):
+        return "warn", "waiting for your approval"
+    if status in ("needs_input", "needs_approval"):
+        return "warn", f"{status}: {note}" if note else status
+    if state in ("blocked", "failed"):
+        return "bad", note or "blocked: see status_report.md in the task folder"
+    if state == "paused":
+        when = entry.get("resume_after")
+        return "warn", "paused" + (f" until about {_hhmm(when)}" if when else "") + (f": {note}" if note else "")
+    if state in ACTIVE_STATES and idle_min is not None and idle_min > STUCK_MIN:
+        return "bad", (f"stuck? no activity for {int(idle_min)} min in '{state}' - the run probably stopped. "
+                       f"`python scripts/orch.py run-next` resumes it from its checkpoint")
+    return None
+
+
+def _hhmm(epoch):
+    import time
+    return time.strftime("%H:%M", time.localtime(epoch))
+
+
+def _last_events(events):
+    last = {}
+    for e in events:
+        last[e.get("task_id")] = e.get("ts")
+    return last
+
+
+def overview(now=None):
+    import time
+    now = time.time() if now is None else now
     tasks_dir = config.home() / "tasks"
+    events, bad = all_events()
+    last = _last_events(events)
     rows = []
     if tasks_dir.is_dir():
         for d in sorted(tasks_dir.iterdir()):
             if not d.is_dir() or not logger.TASK_ID_RE.match(d.name):
                 continue
             st, bud = _json(d / "state.json") or {}, _json(d / "budget.json") or {}
+            t = _epoch(last.get(d.name) or st.get("updated_at"))
+            idle = None if t is None else max(0.0, (now - t) / 60)
+            att = _attention(d.name, d, st, idle)
             rows.append({
                 "task_id": d.name, "title": st.get("title", d.name), "state": st.get("state", "unknown"),
                 "current_agent": st.get("current_agent"), "waiting_approval": st.get("waiting_approval", False),
@@ -62,10 +116,11 @@ def overview():
                 "calls": bud.get("calls", 0), "call_cap": bud.get("call_cap"),
                 "fix_loops": bud.get("fix_loops", 0), "fix_cap": bud.get("fix_cap"),
                 "tokens_est": bud.get("tokens_est", 0), "limit_hits": len(bud.get("limit_hits", [])),
+                "last_event": last.get(d.name), "idle_min": None if idle is None else round(idle, 1),
+                "attention": None if att is None else {"level": att[0], "text": att[1]},
             })
-    events, bad = all_events()
     alerts = [e for e in events if e["event_type"] in ("alert", "limit_hit", "error") or e["status"] == "blocked"][-20:]
-    return {"tasks": rows, "window": Window().used(), "alerts": alerts, "bad_lines": bad}
+    return {"tasks": rows, "window": Window().used(), "alerts": alerts, "bad_lines": bad, "stuck_min": STUCK_MIN}
 
 
 def query_events(task=None, agent=None, event_type=None, q=None, limit=300):
@@ -97,17 +152,72 @@ def payload(ref):
 MAIN_STATES = ["intake", "plan", "build", "test", "fix", "security", "review", "done"]
 
 
-def task_detail(task_id):
+def work_items(plan, prog, state):
+    """Each work item with its dependencies and where it stands, then the steps after the plan."""
+    from .loop import _item_hash                   # the loop's own notion of 'done' (a re-planned item is not done)
+    if not isinstance(plan, dict) or plan.get("status") != "ok":
+        return {"items": [], "steps": []}
+    prog = prog or {}
+    completed = prog.get("completed") or {}
+    done = {w["id"] for w in plan["work_items"] if completed.get(w["id"]) == _item_hash(w)}
+    stopped = state in ("blocked", "failed", "paused")
+    cur = next((w["id"] for w in plan["work_items"] if w["id"] not in done), None)
+    items = []
+    for w in plan["work_items"]:
+        waiting = [dep for dep in w["depends_on"] if dep not in done]
+        if w["id"] in done:
+            status = "done"
+        elif w["id"] == cur:
+            step = {"dev": "fix " + str(prog.get("fix")) if prog.get("fix") else "build", "test": "test"}.get(prog.get("step"), prog.get("step"))
+            status = ("stopped at " if stopped else "in progress: ") + str(step)
+        elif waiting:
+            status = "waiting for " + ", ".join(waiting)
+        else:
+            status = "pending"
+        items.append({"id": w["id"], "title": w["title"], "depends_on": w["depends_on"], "files": w.get("files", []),
+                      "criteria": len(w.get("acceptance_criteria", [])), "status": status})
+    all_done = len(done) == len(plan["work_items"])
+    steps = [{"id": "FINAL", "title": "final regression (all original criteria)",
+              "status": "done" if prog.get("final_done") else ("next" if all_done else "after all items")},
+             {"id": "SECURITY", "title": "security review",
+              "status": "done" if prog.get("security_done") else ("next" if prog.get("final_done") else "after the final regression")}]
+    return {"items": items, "steps": steps}
+
+
+def _costs(events, budget):
+    """Tokens per agent and per model, from the task's own log (each call's tokens are logged exactly once,
+    on agent_end or on its error event). budget.json only counts CALLS per agent/model."""
+    by_agent, by_model = {}, {}
+    for e in events:
+        n = e.get("tokens_estimate") or 0
+        if n and e.get("event_type") in ("agent_end", "error"):
+            by_agent[e.get("agent")] = by_agent.get(e.get("agent"), 0) + n
+            if e.get("model"):
+                by_model[e["model"]] = by_model.get(e["model"], 0) + n
+    return {"tokens_by_agent": by_agent, "tokens_by_model": by_model, "calls_by_agent": budget.get("by_agent", {}),
+            "tokens_total": budget.get("tokens_est", 0), "token_cap": budget.get("token_cap"),
+            "agent_seconds": budget.get("active_s", 0)}
+
+
+def task_detail(task_id, now=None):
+    import time
     if not logger.TASK_ID_RE.match(task_id or ""):
         return None
     d = config.home() / "tasks" / task_id
     if not d.is_dir():
         return None
     events, bad = all_events(task_id)
-    return {"task_id": task_id, "state": _json(d / "state.json") or {}, "budget": _json(d / "budget.json") or {},
-            "progress": _json(d / "progress.json") or {}, "plan": _json(d / "plan.json"),
+    st, bud, prog, plan = _json(d / "state.json") or {}, _json(d / "budget.json") or {}, _json(d / "progress.json") or {}, _json(d / "plan.json")
+    t = _epoch(events[-1]["ts"] if events else st.get("updated_at"))
+    idle = None if t is None else max(0.0, ((time.time() if now is None else now) - t) / 60)
+    att = _attention(task_id, d, st, idle)
+    return {"task_id": task_id, "state": st, "budget": bud, "progress": prog, "plan": plan,
             "events": events, "bad_lines": bad, "states": MAIN_STATES,
-            "has_status_report": (d / "status_report.md").exists()}
+            "has_status_report": (d / "status_report.md").exists(),
+            "work": work_items(plan, prog, st.get("state")), "costs": _costs(events, bud),
+            "security": _json(d / "security_report.json"), "tainted": _json(d / "workspace_tainted.json"),
+            "idle_min": None if idle is None else round(idle, 1),
+            "attention": None if att is None else {"level": att[0], "text": att[1]}}
 
 
 def quality():
@@ -169,10 +279,8 @@ def alerts_view():
     items = []
     ov = overview()
     for t in ov["tasks"]:
-        if t["state"] in ("blocked", "failed"):
-            items.append({"level": "bad", "task_id": t["task_id"], "text": f"task is {t['state']}: see status_report.md"})
-        if t["waiting_approval"]:
-            items.append({"level": "warn", "task_id": t["task_id"], "text": "waiting for your approval"})
+        if t["attention"] and not t["waiting_approval"]:     # waiting approvals are listed below, once each
+            items.append({"level": t["attention"]["level"], "task_id": t["task_id"], "text": t["attention"]["text"]})
         if t["call_cap"] and t["calls"] >= 0.8 * t["call_cap"]:
             items.append({"level": "warn", "task_id": t["task_id"], "text": f"agent calls {t['calls']}/{t['call_cap']}"})
         if t["fix_cap"] and t["fix_loops"] >= t["fix_cap"]:

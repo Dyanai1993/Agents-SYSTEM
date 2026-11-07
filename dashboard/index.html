@@ -39,13 +39,18 @@ async function overview(){
   m.append(el("div",{class:"card"},el("b",{},"Usage window (estimate, not official)"),
     el("div",{},"5 hours: "+Math.round(w.share_5h*100)+"%"),bar(w.share_5h),el("div",{},"7 days: "+Math.round(w.share_7d*100)+"%"),bar(w.share_7d)));
   if(o.alerts.length){const c=el("div",{class:"card"},el("b",{},"Alerts"));o.alerts.slice(-5).forEach(a=>c.append(el("div",{class:"alert"},a.ts.slice(11,19)+" "+a.agent+": "+a.summary)));m.append(c);}
-  const t=el("table",{},el("thead",{},el("tr",{},...["Task","State","Agent","Calls","Fix loops","Tokens (est)","Note"].map(h=>el("th",{},h)))));
-  const tb=el("tbody");o.tasks.forEach(r=>tb.append(el("tr",{},
-    el("td",{style:"cursor:pointer;text-decoration:underline"},r.task_id+" — "+r.title),el("td",{},el("span",{class:"pill "+stCls(r.state)},r.state)),el("td",{},r.current_agent||"—"),
-    el("td",{},r.calls+"/"+(r.call_cap??"?")),el("td",{},r.fix_loops+"/"+(r.fix_cap??"?")),el("td",{},r.tokens_est),
-    el("td",{class:r.waiting_approval?"warn":"mut"},r.waiting_approval?"waiting for your approval":(r.limit_hits?"limit hit":"")))));
-  t.append(tb);m.append(el("div",{class:"card"},o.tasks.length?t:"No tasks yet."));
+  const need=o.tasks.filter(r=>r.attention);
+  if(need.length){const c=el("div",{class:"card"},el("b",{},"Needs you ("+need.length+")"));
+    need.forEach(r=>{const a=el("div",{class:"alert",style:"cursor:pointer;"+(r.attention.level==="warn"?"border-color:var(--warn)":"")},el("b",{},r.task_id)," — "+r.attention.text);a.onclick=()=>openTask(r.task_id);c.append(a);});m.append(c);}
+  const t=el("table",{},el("thead",{},el("tr",{},...["Task","State","Agent","Last activity","Calls","Fix loops","Tokens (est)","Needs attention"].map(h=>el("th",{},h)))));
+  const tb=el("tbody");o.tasks.forEach(r=>{const name=el("td",{style:"cursor:pointer;text-decoration:underline"},r.task_id+" — "+r.title);name.onclick=()=>openTask(r.task_id);
+    tb.append(el("tr",{},name,el("td",{},el("span",{class:"pill "+stCls(r.state)},r.state)),el("td",{},r.current_agent||"—"),
+    el("td",{class:"mut"},ago(r.idle_min)),el("td",{},r.calls+"/"+(r.call_cap??"?")),el("td",{},r.fix_loops+"/"+(r.fix_cap??"?")),el("td",{},r.tokens_est),
+    el("td",{class:r.attention?r.attention.level:"mut"},r.attention?r.attention.text:(r.limit_hits?"limit hit earlier":""))));});
+  t.append(tb);m.append(el("div",{class:"card"},o.tasks.length?t:"No tasks yet."),el("div",{class:"mut"},"A task counts as stuck after "+o.stuck_min+" min without activity in an active state."));
 }
+function ago(min){if(min==null)return "—";if(min<1)return "just now";if(min<120)return Math.round(min)+" min ago";if(min<1440)return Math.round(min/60)+" h ago";return Math.round(min/1440)+" d ago";}
+function openTask(id){curTask=id;view="task";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v==="task"));m.replaceChildren();tick();}
 function filters(withType){
   const f=el("div",{class:"card"});
   f.append(el("input",{id:"fq",placeholder:"search"}),el("input",{id:"ft",placeholder:"task id"}),el("input",{id:"fa",placeholder:"agent"}));
@@ -78,11 +83,12 @@ let curTask="";
 async function task(){
   const o=await get("/api/overview");
   if(!curTask&&o.tasks.length)curTask=o.tasks[0].task_id;
+  const t=curTask?await get("/api/task?id="+encodeURIComponent(curTask)):null;   // fetch BEFORE clearing: no blank flash on refresh
   m.replaceChildren();
-  const sel=el("select",{});o.tasks.forEach(t=>{const op=el("option",{value:t.task_id},t.task_id+" — "+t.title);if(t.task_id===curTask)op.selected=true;sel.append(op);});
+  const sel=el("select",{});o.tasks.forEach(x=>{const op=el("option",{value:x.task_id},x.task_id+" — "+x.title);if(x.task_id===curTask)op.selected=true;sel.append(op);});
   sel.onchange=()=>{curTask=sel.value;tick();};m.append(el("div",{class:"card"},sel));
-  if(!curTask){m.append(el("div",{class:"card"},"No tasks yet."));return;}
-  const t=await get("/api/task?id="+encodeURIComponent(curTask)),cur=t.state.state||"",b=t.budget;
+  if(!t||t.error){m.append(el("div",{class:"card"},curTask?"Task not found.":"No tasks yet."));return;}
+  const cur=t.state.state||"",b=t.budget;
   const flow=el("div",{class:"card"});
   t.states.forEach((s,i)=>{const p=el("span",{class:"pill",style:"margin-right:4px;"+(s===cur?"background:var(--acc);color:#fff":"")},s);flow.append(p);});
   if(["blocked","failed","paused"].includes(cur))flow.append(el("span",{class:"pill bad"},cur));
@@ -90,10 +96,39 @@ async function task(){
   const ctl=el("div",{class:"card"});
   [["pause","Pause"],["resume","Resume"],["stop","Stop"]].forEach(([a,l])=>{const b=el("button",{style:"margin-right:6px"},l);b.onclick=async()=>{if(a==="stop"&&!confirm("Stop task "+curTask+"?"))return;const r=await post("/api/control",{task_id:curTask,action:a});if(!r.ok)alert(r.body.error);tick();};ctl.append(b);});
   ctl.append(el("span",{class:"mut"},"  (writes a control file; the loop reads it before every agent call)"));
-  m.append(flow,ctl);
-  const cnt=(n,v,c)=>el("div",{},n+": "+v+"/"+(c??"?"));
-  m.append(el("div",{class:"card"},cnt("Agent calls",b.calls??0,b.call_cap),cnt("Fix loops",b.fix_loops??0,b.fix_cap),cnt("Re-plans",b.replans??0,b.replan_cap),
-    el("div",{},"Tokens (est): "+(b.tokens_est??0)),el("div",{},"Work item: "+((t.progress.item??0)+1)+"/"+(t.plan?t.plan.work_items.length:"?")+" ("+(t.progress.step||"-")+")"),
+  m.append(flow);
+  if(t.attention)m.append(el("div",{class:"card alert",style:t.attention.level==="warn"?"border-color:var(--warn)":""},el("b",{},"Needs you: "),t.attention.text));
+  m.append(ctl);
+  // plan and dependencies
+  const wk=el("div",{class:"card"},el("b",{},"Plan and dependencies"),el("span",{class:"mut"},"  last activity "+ago(t.idle_min)));
+  if(t.work.items.length){
+    const wt=el("table",{},el("tr",{},...["Item","Title","Depends on","Criteria","Status"].map(h=>el("th",{},h))));
+    const sc=s=>s==="done"?"ok":s.startsWith("stopped")?"bad":s.startsWith("in progress")?"warn":"mut";
+    t.work.items.forEach(w=>wt.append(el("tr",{},el("td",{},el("b",{},w.id)),el("td",{},w.title),el("td",{class:"mut"},w.depends_on.length?w.depends_on.join(", "):"—"),
+      el("td",{class:"mut"},w.criteria),el("td",{},el("span",{class:"pill "+sc(w.status)},w.status)))));
+    t.work.steps.forEach(s=>wt.append(el("tr",{},el("td",{},el("b",{},s.id)),el("td",{},s.title),el("td",{class:"mut"},s.id==="FINAL"?"all items":"FINAL"),el("td",{}),
+      el("td",{},el("span",{class:"pill "+(s.status==="done"?"ok":s.status==="next"?"warn":"mut")},s.status)))));
+    wk.append(wt);
+  } else wk.append(el("div",{class:"mut"},t.plan?"The plan has no work items (status: "+t.plan.status+").":"No plan yet."));
+  m.append(wk);
+  if(t.tainted)m.append(el("div",{class:"card alert"},el("b",{},"Workspace needs restoring: "),"a "+t.tainted.role+" call changed files that could not be reverted. Restore: git -C tasks/"+t.task_id+"/workspace reset --hard "+t.tainted.head.slice(0,12)+" and git clean -fd, then retry. (Or delete tasks/"+t.task_id+"/workspace_tainted.json to keep the workspace as it is.)"));
+  // security review
+  const sec=el("div",{class:"card"},el("b",{},"Security review"));
+  if(!t.security)sec.append(el("div",{class:"mut"},"Not run yet."));
+  else{sec.append(el("div",{class:t.security.verdict==="pass"?"ok":t.security.verdict==="fail"?"bad":"warn"},t.security.verdict+" — "+t.security.summary));
+    if(t.security.findings.length){const st=el("table",{},el("tr",{},...["Severity","Category","File","Description"].map(h=>el("th",{},h))));
+      t.security.findings.forEach(f=>st.append(el("tr",{},el("td",{class:["high","critical"].includes(f.severity)?"bad":"warn"},f.severity),el("td",{},f.category),el("td",{class:"mut"},f.file+(f.line?":"+f.line:"")),el("td",{},f.description))));
+      sec.append(st);}}
+  m.append(sec);
+  // cost
+  const c=t.costs,cnt=(n,v,cap)=>el("div",{},n+": "+v+"/"+(cap??"?"));
+  const ct=el("table",{},el("tr",{},el("th",{},"Agent"),el("th",{},"Calls"),el("th",{},"Tokens (est)")));
+  Object.keys(c.calls_by_agent).forEach(a=>ct.append(el("tr",{},el("td",{},a),el("td",{},c.calls_by_agent[a]),el("td",{},c.tokens_by_agent[a]??"—"))));
+  m.append(el("div",{class:"card"},el("b",{},"Cost (subscription usage, estimates)"),
+    el("div",{},"Tokens: "+c.tokens_total+" of a "+(c.token_cap??"?")+" cap"),c.token_cap?bar(c.tokens_total/c.token_cap):"",
+    el("div",{},"By model: "+(Object.entries(c.tokens_by_model).map(([k,v])=>k+" "+v).join(", ")||"—")),
+    el("div",{class:"mut"},"Agent time: "+Math.round(c.agent_seconds/60)+" min"),
+    cnt("Agent calls",b.calls??0,b.call_cap),cnt("Fix loops",b.fix_loops??0,b.fix_cap),cnt("Re-plans",b.replans??0,b.replan_cap),ct,
     el("div",{class:"mut"},t.has_status_report?"status_report.md exists in the task folder":"")));
   const tb=el("table",{},el("tr",{},...["Time","Agent","Model","Type","Summary","Status"].map(h=>el("th",{},h))));
   t.events.forEach(e=>tb.append(el("tr",{},el("td",{class:"mut"},e.ts.slice(11,19)),el("td",{},e.agent),el("td",{class:"mut"},e.model),el("td",{},el("span",{class:"pill"},e.event_type)),

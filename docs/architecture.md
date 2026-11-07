@@ -70,3 +70,14 @@ Specialists originally planned for this phase, decided down to one real role:
 - **integrate**: retired as a separate role. Code that calls an external API is just a normal developer work item; the real risk is network/credential ACCESS, which belongs to Phase 6's `credentials`/`spend` approval gates, not a new agent.
 - **deploy**: retired as a separate role. `orchestrator.deliver()` already does the entire "get this into a real repo" job (branch/patch, idempotency journal). There is no other deployment target in this project to build a specialist for.
 `schemas/task_state.schema.json`'s `state` enum and `approval_request.schema.json`'s gate-type enum were updated to match: `integrate`/`deploy` removed as task states (nothing ever set them); `deploy` stays as a gate type (Phase 6, same category as `delete`/`send`/`spend`/`credentials` - a human-approval gate is still a reasonable future need even with no specialist agent behind it).
+
+## Dashboard monitoring (Phase 5)
+Still read-only (files only, no LLM, no lock probing). `python dashboard/server.py 8765`.
+- Overview: "Needs you" list and a column with ONE reason per task - waiting for approval, needs input (with the question),
+  blocked (with the queue note, e.g. which cap was hit), paused (until when), a workspace an agent changed and could not
+  revert, or **stuck**: an active state with no event for `STUCK_MIN` minutes (the longest role time limit + 10). Last activity per task.
+- Task monitor: the plan's work items with their dependencies and status (done / in progress: build|test|fix N / stopped at ... /
+  waiting for W2 / pending; a re-planned item is not "done"), then the final regression and security steps; the security
+  report with its findings; cost per agent and per model in tokens (summed from the task's own log - every call's tokens are
+  logged exactly once), calls per agent, agent time, share of the token cap.
+- Writes stay as before: approval decisions and pause/resume/stop control files.
