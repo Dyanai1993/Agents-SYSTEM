@@ -45,7 +45,7 @@ and nothing is queued until you approve a revision. Run these on your own comput
 ```bash
 python dashboard/server.py 8765      # then open http://127.0.0.1:8765 -> "New task"
 python scripts/orch.py assistant     # answers your messages: one Haiku call per message, nothing while idle
-python scripts/orch.py run-next      # once you approved and submitted a draft: builds it (one step per run)
+python scripts/orch.py run-next      # once you approved and submitted a draft: builds it until it needs you
 ```
 - The dashboard never calls a model: a message is saved as a turn request, and `orch.py assistant` (or `run-next`)
   answers it. Refreshing the page costs nothing. A failed turn (bad output, usage limit) keeps your draft and waits
