@@ -2,8 +2,8 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent Dashboard</title>
 <style>
-:root{--bg:#fff;--fg:#1d2330;--mut:#5b6475;--card:#f5f7fa;--line:#d9dee7;--acc:#2f6fed;--ok:#17803d;--warn:#b45309;--bad:#b42318}
-@media (prefers-color-scheme:dark){:root{--bg:#12151c;--fg:#e6e9f0;--mut:#9aa3b5;--card:#1b2029;--line:#2c3342;--acc:#6b9bff;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}}
+:root{--bg:#fff;--fg:#1d2330;--mut:#5b6475;--card:#f5f7fa;--line:#d9dee7;--acc:#2f6fed;--ok:#17803d;--warn:#b45309;--bad:#b42318;--onacc:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--fg:#e6e9f0;--mut:#9aa3b5;--card:#1b2029;--line:#2c3342;--acc:#6b9bff;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--onacc:#0b1020}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
 header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg)}
 header h1{font-size:17px;margin:0 12px 0 0}
@@ -15,10 +15,36 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 .pill{padding:1px 8px;border-radius:99px;border:1px solid var(--line);font-size:12px}
 .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.mut{color:var(--mut)}
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc)}
-input,select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px}
+input,select,textarea{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px}
+textarea:disabled{opacity:.7}
 .msg{border-left:3px solid var(--acc);padding:6px 10px;margin:6px 0;background:var(--card);border-radius:0 8px 8px 0}
 .msg.err{border-color:var(--bad)}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;margin:6px 0 0}
 details summary{cursor:pointer}.alert{border-left:3px solid var(--bad);padding:4px 10px;margin:4px 0}
+[hidden]{display:none!important}.small{font-size:12px}
+/* Requirements Assistant chat */
+.awrap{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}.awrap>.card{flex:1 1 400px;min-width:0}
+.chat{display:flex;flex-direction:column}
+.chatlog{display:flex;flex-direction:column;gap:10px;min-height:260px;max-height:calc(100vh - 330px);overflow-y:auto;padding:12px 4px;margin:8px 0;border-block:1px solid var(--line)}
+.row{display:flex;flex-direction:column;gap:2px;max-width:88%}.row.me{align-self:flex-end;align-items:flex-end}.row.ai{align-self:flex-start;align-items:flex-start}
+.who{font-size:12px;color:var(--mut);padding:0 6px}
+.bub{padding:8px 12px;border-radius:16px;border:1px solid var(--line);background:var(--bg);max-width:100%}
+.bub.me{background:color-mix(in srgb,var(--acc) 14%,var(--bg));border-color:color-mix(in srgb,var(--acc) 35%,var(--bg));border-bottom-right-radius:4px}
+.bub.ai{border-bottom-left-radius:4px}.bub.fail{border-color:var(--bad)}
+.btxt{white-space:pre-wrap;overflow-wrap:anywhere}
+.time{font-size:11px;color:var(--mut);margin-top:4px;text-align:end}
+.sys{align-self:center;max-width:90%;font-size:12px;color:var(--mut);border:1px dashed var(--line);border-radius:99px;padding:2px 12px;text-align:center}
+.sugg{margin-top:8px}.sugg .lbl{font-size:12px;color:var(--warn)}
+.chip{display:inline-block;margin:4px 6px 0 0;padding:3px 10px;border-radius:12px;border:1px solid var(--warn);background:none;color:var(--fg);font:inherit;font-size:13px;text-align:start}
+button.chip{cursor:pointer}button.chip:hover{background:color-mix(in srgb,var(--warn) 12%,transparent)}
+.dots i{display:inline-block;width:6px;height:6px;margin:0 2px;border-radius:50%;background:var(--mut);animation:blink 1.2s infinite}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}@media (prefers-reduced-motion:reduce){.dots i{animation:none}}
+.compose .crow{display:flex;gap:8px;align-items:flex-end}
+.compose textarea{flex:1;min-width:0;resize:none;font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:8px 10px;max-height:320px}
+.compose textarea:focus{outline:2px solid var(--acc);outline-offset:-1px}
+.compose .send{background:var(--acc);color:var(--onacc);border:0;border-radius:10px;padding:8px 18px;cursor:pointer;font:inherit}
+.compose .send:disabled{opacity:.45;cursor:default}
+.hint{display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-top:4px}
 </style></head><body>
 <header><h1>Agent Dashboard</h1>
 <nav><button data-v="assistant">New task</button><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="learning">Learning</button><button data-v="alerts">Alerts</button></nav>
@@ -44,12 +70,53 @@ function toText(d,f){if(f==="goal")return d.goal;if(f==="unknowns")return d.unkn
 function fromText(f,v){if(f==="goal")return v.trim();const rows=v.split("\n").map(x=>x.trim()).filter(Boolean);
   if(f==="unknowns")return rows.map(r=>/^\[blocking\]/i.test(r)?{question:r.replace(/^\[blocking\]\s*/i,""),blocking:true}:{question:r,blocking:false});return rows;}
 function dirtyKeys(sid){return FIELDS.map(([f])=>sid+":"+f).filter(k=>k in typed);}
-async function startDraft(){curDraft=null;view="assistant";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v==="assistant"));m.replaceChildren();tick();}
-function openDraft(id){curDraft=id;view="assistant";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v==="assistant"));m.replaceChildren();tick();}
-async function assistantView(){
+async function startDraft(){curDraft=null;view="assistant";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v==="assistant"));wantFocus="msg:new";m.replaceChildren();tick();}
+function openDraft(id){curDraft=id;view="assistant";document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v==="assistant"));wantFocus="msg:"+id;m.replaceChildren();tick();}
+const MSG_MAX=8000;   // the server's message limit (assistant.MESSAGE_MAX); a test keeps the two equal
+let lastSig="",wantFocus=null;
+function grow(t){requestAnimationFrame(()=>{t.style.height="auto";t.style.height=Math.min(t.scrollHeight+2,320)+"px";});}
+function hhmm(ts){const d=new Date(ts);if(isNaN(d))return "";const t=d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});return d.toDateString()===new Date().toDateString()?t:d.toLocaleDateString([],{month:"short",day:"numeric"})+" "+t;}
+function dur(s){s=Math.max(0,Math.round(s));return s<60?s+" s":Math.floor(s/60)+" min "+s%60+" s";}
+// Parts that change without a re-render: [data-since] counts the seconds since that time, [data-after] appears after that many seconds.
+setInterval(()=>{const now=Date.now()/1000;document.querySelectorAll("[data-since]").forEach(e=>{e.textContent=dur(now-e.dataset.since);});
+  document.querySelectorAll("[data-after]").forEach(e=>{e.hidden=now-e.dataset.from<+e.dataset.after;});},1000);
+// A re-render rebuilds every box: the box you were typing in gets its focus, cursor and scroll back (boxes with data-key).
+function saveFocus(){if(wantFocus)return {key:wantFocus,end:true};const a=document.activeElement;
+  return a&&a.dataset&&a.dataset.key&&m.contains(a)?{key:a.dataset.key,s:a.selectionStart,e:a.selectionEnd,top:a.scrollTop}:null;}
+function restoreFocus(f){wantFocus=null;if(!f)return;const n=m.querySelector('[data-key="'+CSS.escape(f.key)+'"]');if(!n||n.disabled)return;
+  n.focus();const L=n.value.length;try{n.setSelectionRange(f.end?L:f.s,f.end?L:f.e);}catch(e){}if(!f.end)n.scrollTop=f.top;}
+function composer(key,{rows,ph,busy,send}){
+  const t=el("textarea",{rows:rows||2,placeholder:ph,dir:"auto","data-key":key,"aria-label":"Your message"});t.value=typed[key]||"";
+  const b=el("button",{class:"send"},"Send"),cnt=el("span",{class:"cnt"});
+  const upd=()=>{const n=t.value.length;cnt.textContent=n.toLocaleString()+" / "+MSG_MAX.toLocaleString()+(n>MSG_MAX?" - too long":"");
+    cnt.className=n>MSG_MAX?"bad":n>MSG_MAX*.9?"warn":"mut";b.disabled=busy||!t.value.trim()||n>MSG_MAX;grow(t);};
+  const go=async()=>{if(b.disabled)return;b.disabled=true;b.textContent="Sending...";await send(t.value);};
+  t.oninput=()=>{typed[key]=t.value;upd();};
+  t.onkeydown=e=>{if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();go();}};
+  b.onclick=go;upd();
+  return el("div",{class:"compose"},el("div",{class:"crow"},t,b),
+    el("div",{class:"hint"},el("span",{class:"mut"},busy?"You can write your next message while the assistant answers.":"Ctrl+Enter sends. Enter adds a new line."),cnt),note(key));}
+function bubble(x,showWho,sid,canUse){
+  if(x.edit)return el("div",{class:"sys",dir:"auto"},x.text+"  "+hhmm(x.ts));
+  const me=x.from==="user",b=el("div",{class:"bub "+(me?"me":"ai")},el("div",{class:"btxt",dir:"auto"},x.text));
+  if(x.suggestions&&x.suggestions.length){
+    const s=el("div",{class:"sugg"},el("div",{class:"lbl"},"Proposals - not confirmed by you"+(canUse?". Click one to quote it in your reply:":":")));
+    x.suggestions.forEach(g=>{const c=el(canUse?"button":"span",{class:"chip",dir:"auto"},g);
+      if(canUse)c.onclick=()=>{const k="msg:"+sid;typed[k]=(typed[k]&&typed[k].trim()?typed[k].trimEnd()+"\n":"")+g;wantFocus=k;tick();};s.append(c);});
+    b.append(s);}
+  if(x.conflicts&&x.conflicts.length)b.append(list("Conflicts",x.conflicts,"bad"));
+  if(x.draft_not_applied)b.append(el("div",{class:"warn small",style:"margin-top:6px"},"This answer was for an older version of the draft - your edit was kept and its proposal was not applied. Ask again if you want it."));
+  b.append(el("div",{class:"time"},hhmm(x.ts)));
+  return el("div",{class:"row "+(me?"me":"ai")},showWho?el("div",{class:"who"},me?"You":"Assistant"):"",b);}
+async function assistantView(auto){
   const ss=await get("/api/assistant/sessions"),v=curDraft?await get("/api/assistant?id="+encodeURIComponent(curDraft)):null;
+  const sig=JSON.stringify([curDraft,ss,v]);
+  if(auto&&sig===lastSig&&m.querySelector("[data-view=assistant]"))return;   // nothing changed: leave the page (and your typing) alone
+  lastSig=sig;
+  const old=m.querySelector(".chatlog"),prev=old&&old.dataset.sid===String(curDraft)?{top:old.scrollTop,n:old.dataset.n,bottom:old.scrollHeight-old.scrollTop-old.clientHeight<60}:null;
+  const fs=saveFocus();
   m.replaceChildren();
-  const top=el("div",{class:"card"},el("b",{},"Requirements Assistant"),el("span",{class:"mut"},"  describe what you want; the assistant asks what it needs and keeps the draft. Nothing is queued until you approve it."));
+  const top=el("div",{class:"card","data-view":"assistant"},el("b",{},"Requirements Assistant"),el("span",{class:"mut"},"  describe what you want; the assistant asks what it needs and keeps the draft. Nothing is queued until you approve it."));
   const nb=el("button",{style:"margin:6px 6px 0 0"},"Start a new request");nb.onclick=startDraft;top.append(el("div",{},nb));
   const open=ss.sessions.filter(s=>s.status!=="submitted");
   if(ss.sessions.length){const sel=el("select",{style:"margin-top:6px"});sel.append(el("option",{value:""},"Your drafts ("+open.length+" open)..."));
@@ -57,38 +124,42 @@ async function assistantView(){
     sel.onchange=()=>{if(sel.value)openDraft(sel.value);};top.append(sel);}
   m.append(top);
   if(!v||v.error){
-    const c=el("div",{class:"card"},el("b",{},"What do you want built?"),el("div",{class:"mut"},"In your own words - Hebrew or English. You can paste a document too: it is treated as source material."));
-    const b=el("button",{style:"margin-top:6px"},"Send");
-    b.onclick=async()=>{const r=await post("/api/assistant/message",{text:typed["msg:new"]||""});if(r.ok){delete typed["msg:new"];curDraft=r.body.session;}else flash["msg:new"]={cls:"bad",text:r.body.error};tick();};
-    const t=box("msg:new","e.g. Make the audio lessons easier for a complete beginner, and let me stop playback anytime",5);t.setAttribute("dir","auto");
-    c.append(t,b,note("msg:new"));m.append(c);return;}
-  const sid=v.id,turn=v.turn||{},busy=["pending","running"].includes(turn.status),sub=v.submitted;
-  const wrap=el("div",{style:"display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start"});
+    const c=el("div",{class:"card"},el("b",{},"What do you want built?"),
+      el("div",{class:"mut",style:"margin-bottom:8px"},"In your own words - Hebrew or English. A rough idea is enough, and you can paste a document (it is treated as source material). The assistant asks what it needs and keeps a draft you can edit."));
+    c.append(composer("msg:new",{rows:5,busy:false,ph:"e.g. Make the audio lessons easier for a complete beginner, and let me stop playback anytime",
+      send:async text=>{const r=await post("/api/assistant/message",{text});
+        if(r.ok){delete typed["msg:new"];delete flash["msg:new"];curDraft=r.body.session;wantFocus="msg:"+r.body.session;}else flash["msg:new"]={cls:"bad",text:r.body.error};tick();}}));
+    m.append(c);restoreFocus(fs);return;}
+  const sid=v.id,turn=v.turn||{},busy=["pending","running"].includes(turn.status),sub=v.submitted,now=Date.now()/1000;
+  const wrap=el("div",{class:"awrap"});
   // conversation
-  const conv=el("div",{class:"card",style:"flex:1 1 380px;min-width:0"},el("b",{},"Conversation"),el("span",{class:"mut"},"  "+sid));
-  v.conversation.forEach(x=>{
-    if(x.edit){conv.append(el("div",{class:"mut",style:"margin:4px 0",dir:"auto"},x.text));return;}
-    const b=el("div",{class:"msg",style:"margin:6px 0;"+(x.from==="user"?"":"border-color:var(--ok)")},el("b",{},x.from==="user"?"You":"Assistant"),el("div",{dir:"auto",style:"white-space:pre-wrap"},x.text));
-    if(x.suggestions&&x.suggestions.length)b.append(list("Proposals (not confirmed by you)",x.suggestions,"warn"));
-    if(x.conflicts&&x.conflicts.length)b.append(list("Conflicts",x.conflicts,"bad"));
-    if(x.draft_not_applied)b.append(el("div",{class:"warn"},"This answer was for an older version of the draft - your edit was kept and its proposal was not applied. Ask again if you want it."));
-    conv.append(b);});
-  if(turn.status==="pending")conv.append(el("div",{class:"warn"},"Waiting for the assistant. It answers while `python scripts/orch.py assistant` (or `run-next`) is running."));
-  if(turn.status==="running")conv.append(el("div",{class:"warn"},"The assistant is answering..."));
-  if(turn.status==="failed"){const rb=el("button",{style:"margin:4px 0"},"Retry");rb.onclick=async()=>{const r=await post("/api/assistant/retry",{session:sid});if(!r.ok)flash["msg:"+sid]={cls:"bad",text:r.body.error};tick();};
-    conv.append(el("div",{class:"bad"},"The assistant's turn failed: "+turn.error),rb);}
-  if(!sub){const t=box("msg:"+sid,busy?"Wait for the reply...":"Answer, correct, or add something...",3);t.setAttribute("dir","auto");if(busy)t.disabled=true;
-    const sb=el("button",{style:"margin-top:6px"},"Send");sb.disabled=busy;
-    sb.onclick=async()=>{const r=await post("/api/assistant/message",{session:sid,text:typed["msg:"+sid]||""});if(r.ok)delete typed["msg:"+sid];else flash["msg:"+sid]={cls:"bad",text:r.body.error};tick();};
-    conv.append(t,sb);}
-  conv.append(note("msg:"+sid));
+  const conv=el("div",{class:"card chat"},el("div",{},el("b",{},"Conversation"),el("span",{class:"mut"},"  "+sid+" - "+v.summary.status)));
+  const log=el("div",{class:"chatlog","data-sid":sid,"data-n":v.conversation.length+":"+(turn.status||""),"aria-live":"polite"});
+  let lastAi=-1,prevFrom=null;v.conversation.forEach((x,i)=>{if(x.from==="assistant")lastAi=i;});
+  v.conversation.forEach((x,i)=>{log.append(bubble(x,!x.edit&&x.from!==prevFrom,sid,!sub&&i===lastAi));if(!x.edit)prevFrom=x.from;});
+  if(busy){const since=turn.status==="running"?(turn.claimed_at||turn.requested_at):turn.requested_at;
+    const t=el("div",{class:"bub ai"},el("span",{class:"dots","aria-hidden":"true"},el("i"),el("i"),el("i")),
+      turn.status==="running"?"  The assistant is writing  ":"  Waiting for the assistant  ",el("span",{class:"mut small","data-since":since},dur(now-since)));
+    if(turn.status==="pending"){const h=el("div",{class:"warn small","data-from":since,"data-after":"20",style:"margin-top:4px"},
+      "Still waiting: is python scripts/orch.py assistant running? It answers your messages - the dashboard itself never calls a model.");h.hidden=now-since<20;t.append(h);}
+    log.append(el("div",{class:"row ai"},prevFrom==="assistant"?"":el("div",{class:"who"},"Assistant"),t));}
+  if(turn.status==="failed"){const rb=el("button",{},"Retry");
+    rb.onclick=async()=>{rb.disabled=true;rb.textContent="Retrying...";const r=await post("/api/assistant/retry",{session:sid});if(!r.ok)flash["msg:"+sid]={cls:"bad",text:r.body.error};tick();};
+    log.append(el("div",{class:"row ai"},el("div",{class:"who"},"Assistant"),el("div",{class:"bub ai fail"},el("b",{class:"bad"},"The assistant could not answer."),
+      el("div",{class:"btxt small",dir:"auto",style:"margin-top:4px"},turn.error),
+      el("div",{style:"margin-top:8px"},rb,el("span",{class:"mut small"},"  Nothing is retried on its own. One Retry = one new call.")))));}
+  conv.append(log);
+  if(!sub)conv.append(composer("msg:"+sid,{rows:2,busy,ph:busy?"Write your next message - you can send it after the reply":"Answer, correct, or add something...",
+    send:async text=>{const k="msg:"+sid,r=await post("/api/assistant/message",{session:sid,text});
+      if(r.ok){delete typed[k];delete flash[k];wantFocus=k;}else flash[k]={cls:"bad",text:r.body.error};tick();}}));
+  else conv.append(el("div",{class:"mut small"},"This conversation is closed: the draft was approved and submitted."));
   // draft editor
-  const dc=el("div",{class:"card",style:"flex:1 1 380px;min-width:0"},el("b",{},"Requirement draft"),el("span",{class:"mut"},"  revision "+v.revision+(sub?" - submitted":"")));
+  const dc=el("div",{class:"card"},el("b",{},"Requirement draft"),el("span",{class:"mut"},"  revision "+v.revision+(sub?" - submitted":"")));
   const dirty=dirtyKeys(sid),base=typed["base:"+sid];
   if(dirty.length&&base!==undefined&&base!==v.revision)dc.append(el("div",{class:"warn"},"The draft changed (revision "+v.revision+") while you were editing. Saving will be refused - copy your edits, then discard them."));
-  FIELDS.forEach(([f,label,rows])=>{const k=sid+":"+f;const t=el("textarea",{rows:rows,dir:"auto",style:"width:100%;font:inherit"});
+  FIELDS.forEach(([f,label,rows])=>{const k=sid+":"+f;const t=el("textarea",{rows:rows,dir:"auto",style:"width:100%;font:inherit","data-key":"d:"+k});
     t.value=k in typed?typed[k]:toText(v.draft,f);if(sub)t.disabled=true;
-    t.oninput=()=>{if(typed["base:"+sid]===undefined)typed["base:"+sid]=v.revision;typed[k]=t.value;};
+    t.oninput=()=>{const first=!(k in typed);if(typed["base:"+sid]===undefined)typed["base:"+sid]=v.revision;typed[k]=t.value;if(first)tick();};  // first edit: show Save / Discard now
     dc.append(el("div",{style:"margin-top:6px"},el("b",{},label)),t);});
   if(!sub){const save=el("button",{style:"margin:6px 6px 0 0"},"Save draft"),disc=el("button",{style:"margin:6px 6px 0 0"},"Discard my edits");
     save.disabled=!dirty.length;disc.disabled=!dirty.length;
@@ -116,6 +187,8 @@ async function assistantView(){
     cancel.onclick=()=>{delete reviewOpen[sid];tick();};rd.append(exact,ok,cancel);}
   dc.append(rd);
   wrap.append(conv,dc);m.append(wrap);
+  log.scrollTop=!prev||prev.bottom||prev.n!==log.dataset.n?log.scrollHeight:prev.top;   // follow new messages; keep your place if you scrolled up
+  restoreFocus(fs);
 }
 function list(title,rows,cls){return el("div",{style:"margin-top:6px"},el("b",{},title),rows.length?el("ul",{style:"margin:2px 0"},...rows.map(r=>el("li",{class:cls||"",dir:"auto"},r))):el("div",{class:"mut"},"(none)"));}
 function requirementCard(t){
@@ -316,7 +389,8 @@ async function learning(){
   m.append(el("div",{class:"card"},el("b",{},"Real eval runs"),r.eval_runs.length?rt:el("div",{class:"mut"},"None yet. Run `python evals/run_evals.py real --label baseline --yes`.")));
 }
 const views={assistant:assistantView,overview,activity,messages,task,quality,approvals,usage,learning,alerts};
-async function tick(){try{const ap=await get("/api/approvals");const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view]();document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
+async function tick(auto){try{const ap=await get("/api/approvals");const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view](auto);document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
-tick();setInterval(()=>{if(!document.querySelector("details[open]")&&!document.activeElement.matches?.("input,textarea"))tick();},2500);
+// Auto refresh pauses while you type in a box it cannot restore; boxes with data-key (the assistant chat) keep refreshing.
+tick();setInterval(()=>{const a=document.activeElement;if(!document.querySelector("details[open]")&&!(a.matches?.("input,textarea")&&!a.dataset.key))tick(true);},2500);
 </script></body></html>

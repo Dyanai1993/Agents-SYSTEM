@@ -50,6 +50,8 @@ python scripts/orch.py run-next      # once you approved and submitted a draft: 
 - The dashboard never calls a model: a message is saved as a turn request, and `orch.py assistant` (or `run-next`)
   answers it. Refreshing the page costs nothing. A failed turn (bad output, usage limit) keeps your draft and waits
   for you to press Retry - it is never retried on its own.
+- Ctrl+Enter sends (Enter adds a line). You can type your next message while the assistant answers, and the page keeps
+  refreshing without losing what you typed. Click a proposal to quote it into your reply.
 - Edit the draft by hand any time; a late assistant reply never overwrites a newer edit (revision numbers).
 - "Review and submit" shows the exact requirement; "Approve and submit" queues ONE task with exactly that requirement
   (a retry or double click returns the same task). It goes straight to the Architect: no intake, no requirement gate.

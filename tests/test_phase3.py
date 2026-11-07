@@ -627,6 +627,14 @@ class DashboardPageTests(unittest.TestCase):
             r = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr[-800:])
 
+    def test_the_chat_character_counter_uses_the_servers_limit(self):
+        """The counter disables Send above the limit: it must be the server's limit, not a guess."""
+        import re
+        from pathlib import Path
+        from agentsys import assistant
+        html = (Path(__file__).resolve().parent.parent / "dashboard" / "index.html").read_text(encoding="utf-8")
+        self.assertEqual(int(re.search(r"const MSG_MAX=(\d+)", html).group(1)), assistant.MESSAGE_MAX)
+
 
 class DashboardServerHeaderTests(TmpHome):
     """Review (fourth round): server.py sent no frame-ancestors/X-Frame-Options, so the dashboard (which
