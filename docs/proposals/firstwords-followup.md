@@ -28,8 +28,8 @@ neither problem.
 ## Recommendation: two small tasks, in this order
 
 **A before B.** A fixes a path that deletes the user's working offline copy. B then lays out and styles the final
-screen, including A's progress, failure and retry states. Each task stays small (5-7 criteria), which avoids the
-oversized loop T-0025 needed narrowing for.
+screen, including A's progress, failure and retry states. Each task stays small (A has 5 criteria, B has 9 including
+the regression), which avoids the oversized loop T-0025 needed narrowing for.
 
 ### Task A - offline recovery (start from the T-0026 repository, branch `agentsys/T-0026`)
 
@@ -57,7 +57,10 @@ Acceptance criteria:
    - Enter on Retry retries.
    - Focus never falls to the page body.
 
-### Task B - first screen and visual polish (D-0006, extended; start from Task A's branch)
+### Task B - first screen and visual polish (D-0006 revision 4; start from Task A's branch)
+
+D-0006 now holds this requirement. A blocking question keeps it from being submitted until Task A is delivered and
+the draft's project repository points at Task A's branch.
 
 Goal: a first-time adult learner understands within five seconds what the app is for and what to do first. The
 design is calm and modern.
@@ -67,15 +70,15 @@ Constraints:
   - tokens in one file
   - Assistant and Inter bundled with their licence files, working offline
   - one centred column of at most 720px
-  - light, dark and high-contrast themes
+  - light, dark and high-contrast themes, chosen in the header (your earlier decision in D-0006)
   - no mascots
 - Drop D-0006's assumption that only styling changes. The screen hierarchy changes.
 
-Acceptance criteria:
+Acceptance criteria (a summary; D-0006 has the exact nine):
 1. At 390px and 1280px, the first screen shows exactly one prominent first action ("הורדה לשימוש ללא חיבור") in the
-   first viewport, under a heading and one sentence that explains it.
-2. Theme, update and other rarely used controls sit in a separate titled settings section, never beside the first
-   action.
+   first viewport, under a heading and one sentence that explains it, with its progress and result message beside it.
+2. Nothing else sits in the first action's section. The update check and other rarely used controls are in a
+   separate titled settings section. The header shows the app name and the theme selector.
 3. `tokens.css` defines colours, an 8px spacing scale, radii and type sizes. A check script fails the build when any
    other CSS file has a hard-coded colour.
 4. Assistant and Inter are bundled locally with their licence files, and the app renders with them while offline.
@@ -84,6 +87,7 @@ Acceptance criteria:
 6. At 390px there is no horizontal scroll. Hebrew is right-to-left, and English words are left-to-right.
 7. Playwright saves screenshots at 390x844 and 1280x800, light and dark, to `firstwords/screenshots/`. The visual
    judgement is reported as unverified (visual), for the owner.
+8. Every check that T-0026 and Task A defined still passes.
 
 ## How the owner checks the result (no model calls)
 
@@ -95,5 +99,4 @@ Acceptance criteria:
 
 ## Not decided here
 
-- Whether to edit D-0006 into Task B or start a new draft. D-0006 is untouched.
 - When to run each task. Each live run needs your quota authorization.
