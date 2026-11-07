@@ -95,7 +95,10 @@ def _task_action(path, body):
             if act not in ("start", "continue", "retry"):
                 return 400, {"error": "action must be start, continue or retry"}
             if act == "retry":                                 # blocked / needs_approval -> queued, from the checkpoint
-                orchestrator.retry(tid)
+                note = " ".join(str(body.get("answer") or "").split())   # optional: what the agents should do differently
+                if len(note) > ANSWER_MAX:
+                    return 400, {"error": f"notes are limited to {ANSWER_MAX} characters (yours has {len(note)}): shorten it"}
+                orchestrator.retry(tid, note or None)
             return 200, {"request": worker.request_run(tid, act)}
         answer = " ".join(str(body.get("answer", "")).split())
         if not answer:

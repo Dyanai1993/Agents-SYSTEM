@@ -112,6 +112,9 @@ def _attention(task_id, d, st, idle_min, live=None):
         return "warn", "a question for you - answer it in the Task monitor" + (f": {note}" if note else "")
     if status == "needs_approval":
         return "warn", f"needs your approval: {note}" if note else "needs your approval (Approvals tab)"
+    if (state in ("blocked", "failed") or status == "blocked") and "not covered by any work item" in note:
+        return "bad", ("the plan cannot cover all acceptance criteria in one task - a Retry fails the same way. "
+                       "Narrow the requirement (Task monitor) to what fits, and put the rest in new tasks")
     if state in ("blocked", "failed") or status == "blocked":
         return "bad", (note or "blocked: see status_report.md in the task folder") + " - fix the cause, then press Retry"
     if state == "paused" or status == "paused":

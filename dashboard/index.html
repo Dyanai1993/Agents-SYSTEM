@@ -299,7 +299,7 @@ function runCard(t,hasReview){
       c.append(el("div",{},btn(first?"Start":"Continue",()=>send("/api/task/run",{task_id:id,action:first?"start":"continue"},(first?"Start":"Continue")+" requested: the worker picks it up."),true),
         el("span",{class:"mut small"},first?"The worker plans, builds and tests it until it needs you.":"It continues from the last checkpoint.")));}
     else if(st==="stopped"||(st==="paused"&&r.blocker_needs_you))c.append(el("div",{},btn("Resume",()=>send("/api/control",{task_id:id,action:"resume"},"Resumed: press Continue to run it."),true)));
-    else if(st==="blocked")c.append(el("div",{},btn("Retry",()=>send("/api/task/run",{task_id:id,action:"retry"},"Retry requested: the worker continues from the last checkpoint."),true),el("span",{class:"mut small"},"Fix the cause first (see the note above).")));
+    else if(st==="blocked")c.append(retryBox(id,r));
     else if(st==="needs_input")c.append(answerBox(id,r.note));
     else if((st==="waiting_approval"||st==="needs_approval")&&hasReview&&r.blocker_needs_you)c.append(el("div",{},el("span",{class:"warn"},"The result is ready for your review: "),btn("Go to the review",()=>document.getElementById("review").scrollIntoView({behavior:"smooth"}),true)));
     else if(st==="waiting_approval"||st==="needs_approval")c.append(el("div",{},el("span",{class:"warn"},r.blocker),btn("Open Approvals",()=>go("approvals"),true)));
@@ -375,6 +375,22 @@ function requirementEditor(id,r){
     else taskNote={cls:"bad",text:"Not saved: "+x.body.error};tick();};
   cancel.onclick=()=>{keys.forEach(k=>delete typed[k]);delete reqEdit[id];tick();};
   c.append(save,cancel);return c;}
+// A blocked task: say what should change (optional) and retry. Seen live: Retry had no input, and on a plan that cannot
+// cover all criteria it failed the same way every time (each one an Architect call) - then narrowing is the way out.
+function retryBox(id,r){
+  const cover=(r.note||"").includes("not covered by any work item"),k="retry:"+id;
+  const t=el("textarea",{rows:2,dir:"auto","data-key":k,"aria-label":"What should change",placeholder:"What should the agents do differently? (optional, up to 300 characters - added to the requirement as a clarification)",style:"width:100%;margin-top:6px"});
+  t.value=typed[k]||"";const cnt=el("span",{class:"mut"});
+  const b=el("button",{class:cover?"":"primary",style:"margin:6px 6px 0 0"},cover?"Retry anyway":"Retry");
+  const upd=()=>{const n=t.value.trim().replace(/\s+/g," ").length;cnt.textContent=n+" / 300";cnt.className=n>300?"bad":"mut";b.disabled=n>300;};
+  t.oninput=()=>{typed[k]=t.value;upd();};upd();
+  b.onclick=async()=>{b.disabled=true;const x=await post("/api/task/run",{task_id:id,action:"retry",answer:t.value});
+    if(x.ok){delete typed[k];taskNote={cls:"ok",text:"Retry requested: the worker continues from the last checkpoint."};}else taskNote={cls:"bad",text:x.body.error};tick();};
+  const box=el("div",{style:"margin-top:6px"});
+  if(cover)box.append(el("div",{class:"bad"},el("b",{},"A Retry will fail the same way: "),"the plan cannot cover all "+(r.requirement?r.requirement.acceptance_criteria.length:"")+" acceptance criteria in one task (30 agent calls, about 14 work items). ",
+    r.can_edit_requirement?"Use 'Narrow or correct the requirement' below: keep what fits this task and start new requests for the rest.":"Start a new, smaller request for the first part (New task)."));
+  box.append(t,el("div",{class:"hint"},el("span",{class:"mut"},"Fix the cause first (see the note above)."),cnt),b);
+  return box;}
 function answerBox(id,question){
   const k="ans:"+id,t=el("textarea",{rows:3,dir:"auto","data-key":k,"aria-label":"Your answer",placeholder:"Your answer (up to 300 characters)",style:"width:100%;margin-top:6px"});
   t.value=typed[k]||"";const cnt=el("span",{class:"mut"}),b=el("button",{class:"primary",style:"margin-top:6px"},"Send answer and continue");

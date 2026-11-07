@@ -269,6 +269,21 @@ class RequirementEditTests(WorkerBase):
         self.assertEqual(self.step(fb(architect=arch, developer=self.dev("T-0001")))["status"], "waiting_approval")
         self.assertEqual([c["text"] for c in seen[0]], ["criterion 1", "criterion 3"])         # planned from revision 2
 
+    def test_a_blocked_task_takes_a_note_with_retry_and_a_coverage_failure_says_narrow_it(self):
+        orchestrator.submit("T-0001", requirements=self.BIG)
+        e = orchestrator.load_entry("T-0001")
+        e.update(status="blocked", note="Step failed: plan rejected: requirement criterion AC2 is not covered by any work item")
+        orchestrator.save_entry(e)
+        (self.home / "tasks/T-0001").mkdir(parents=True, exist_ok=True)
+        (self.home / "tasks/T-0001/state.json").write_text(json.dumps({"state": "blocked"}))
+        self.assertIn("a Retry fails the same way", dd.task_detail("T-0001")["attention"]["text"])
+        code, body = actions.handle_post("/api/task/run", {"task_id": "T-0001", "action": "retry", "answer": "use SQLite"}, H)
+        self.assertEqual(code, 200, body)
+        self.assertIn("use SQLite", json.dumps(orchestrator.load_entry("T-0001")["requirements"]))
+        e = orchestrator.load_entry("T-0001"); e["status"] = "blocked"; orchestrator.save_entry(e)
+        worker.cancel_run("T-0001")
+        self.assertEqual(actions.handle_post("/api/task/run", {"task_id": "T-0001", "action": "retry", "answer": "x" * 301}, H)[0], 400)
+
     def test_no_edit_once_something_was_built(self):
         orchestrator.submit("T-0001", requirements=REQ)
         worker.request_run("T-0001")
