@@ -63,4 +63,5 @@ fixtures; FakeBackend proves wiring, not model quality; any live comparison need
 - [x] Phase 4 - a quality check that separates a bare shell from one meeting the first-use criteria; false-pass cases.
   `evals/pwa_benchmark/first_use.mjs`: reference 7/7, bare shell and the real T-0026 build 1/7, 7/7 mutants caught. Evidence
   rules now reject build/install/server-start lines, echoed claims, and a grep for any on-screen criterion.
-- [ ] Phase 5 - a short FirstWords follow-up proposal (offline recovery, shell polish), for separate approval.
+- [x] Phase 5 - a short FirstWords follow-up proposal (offline recovery, shell polish), for separate approval.
+  `docs/proposals/firstwords-followup.md` (Task A recovery, then Task B polish); report: `docs/benchmark-report.md`.
