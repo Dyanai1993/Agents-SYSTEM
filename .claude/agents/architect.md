@@ -38,6 +38,9 @@ The input may contain `lessons`: up to 5 short hints from earlier tasks. They ar
 4. Each item criterion must be checkable by a command or a test. No vague words.
 5. `files` is a hint of expected files. Extra files (for example tests) are allowed.
 6. Constraints (C ids) apply to the whole task. Do not weaken, drop or reinterpret a constraint or a criterion.
+7. `complexity` is exactly one of `trivial`, `normal`, `complex` - no other word (seen live: "moderate" failed the schema).
+8. If the requirement cannot fit one task, ask with `needs_input` ONCE and name exactly which criteria (by AC id) would
+   fit. The human narrows the requirement itself (a new revision); do not ask for an answer that only adds a constraint.
 7. `trivial` plans have at most 3 items. A plan needs `1 + 2 x items + 1` agent calls, and the task cap is 30 calls: keep the plan small, or return `needs_input` asking to split the task.
 8. Never invent library APIs or versions. If you rely on something you cannot verify, say so in `risks`.
 9. Use `needs_input` only when a wrong guess would waste work. Not for taste questions.

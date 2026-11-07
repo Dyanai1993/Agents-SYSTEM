@@ -375,6 +375,68 @@ def next_task_id():
     return f"T-{max(nums, default=0) + 1:04d}"
 
 
+def requirement_edit_blocker(task_id, entry=None):
+    """Why the human cannot edit this task's requirement in place now (None = they can). Only before anything is built:
+    a new scope after real work is a new task, not a silent rewrite of the one already built against."""
+    entry = entry or load_entry(task_id)
+    if entry is None:
+        return "no such task"
+    if entry["status"] in ("done", "rejected"):
+        return f"the task is {entry['status']}"
+    if in_requirement_phase(entry):
+        return "the requirement is still a draft waiting for approval: change it there"
+    tdir = config.home() / "tasks" / task_id
+    prog = json.loads((tdir / "progress.json").read_text(encoding="utf-8")) if (tdir / "progress.json").exists() else {}
+    if prog.get("completed"):
+        return "work items were already built against this requirement: start a new task for a new scope"
+    ws = tdir / "workspace"
+    if (ws / ".git").exists():
+        if loop._git(ws, "status", "--porcelain").stdout.strip():
+            return "the workspace has changes from a started work item: start a new task for a new scope"
+        if loop._git(ws, "rev-list", "--count", f"{_base(ws)}..HEAD").stdout.strip() not in ("", "0"):
+            return "the workspace already has commits: start a new task for a new scope"
+    return None
+
+
+def edit_requirement(task_id, req):
+    """The human narrows or corrects the requirement of a task that has built nothing yet. Seen live (T-0025): the
+    brief was too big for one task; an answer can only ADD a clarifying constraint, never remove a criterion, so the
+    Architect asked the same question round after round. Saving makes a new revision (the old one is kept in
+    requirement_history.json), forgets the planning progress so the Architect plans the new revision from scratch,
+    and puts the task back in the queue: press Continue. Calls already spent stay counted (the task budget)."""
+    schema.validate("requirements", req)
+    task_id = logger.safe_task_id(task_id)
+    with _Lock(task_id):
+        e = load_entry(task_id)
+        if e is None:
+            raise KeyError(f"no task {task_id}")
+        why = requirement_edit_blocker(task_id, e)
+        if why:
+            raise ValueError(f"cannot edit the requirement: {why}")
+        tdir = config.home() / "tasks" / task_id
+        hist_path = tdir / "requirement_history.json"
+        hist = json.loads(hist_path.read_text(encoding="utf-8")) if hist_path.exists() else []
+        rev = int(e.get("req_revision") or 1) + 1
+        hist.append({"revision": rev - 1, "replaced_at": logger.now(), "requirement": e["requirements"]})
+        tdir.mkdir(parents=True, exist_ok=True)
+        hist_path.write_text(json.dumps(hist, indent=2, ensure_ascii=False), encoding="utf-8")
+        for f in ("progress.json",):                    # nothing was built: plan the new revision from scratch
+            try:
+                (tdir / f).unlink()
+            except OSError:
+                pass
+        e.update(requirements=req, req_revision=rev, resume_after=None,
+                 status="queued" if e["status"] not in ("waiting_approval", "needs_approval") else e["status"],
+                 note=f"requirement revision {rev} saved by you: press Continue to plan it")
+        save_entry(e)
+        tasks.set_state(task_id, "plan" if (tdir / "plan.json").exists() else "intake", title=e["title"])
+        logger.log_event(task_id, "human", "decision", f"requirement edited: revision {rev}", status="ok",
+                         payload={"revision": rev, "acceptance_criteria": len(req["acceptance_criteria"])})
+    from . import worker
+    worker.cancel_run(task_id)
+    return e
+
+
 def apply_control(task_id, action):
     """Pause / stop / resume, as the user means it. control.json is always written (the loop reads it before every
     agent call). When no run holds the task, the status changes NOW - seen live: a stopped task still said 'queued'

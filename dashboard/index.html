@@ -170,6 +170,8 @@ async function assistantView(auto){
     t.value=k in typed?typed[k]:toText(v.draft,f);if(sub)t.disabled=true;
     t.oninput=()=>{const first=!(k in typed);if(typed["base:"+sid]===undefined)typed["base:"+sid]=v.revision;typed[k]=t.value;if(first)tick();};  // first edit: show Save / Discard now
     dc.append(el("div",{style:"margin-top:6px"},el("b",{},label)),t);});
+  {const n=fromText("acceptance_criteria",(sid+":acceptance_criteria") in typed?typed[sid+":acceptance_criteria"]:toText(v.draft,"acceptance_criteria")).length;
+    if(n>TASK_CRITERIA_HINT)dc.append(el("div",{class:"warn",style:"margin-top:6px"},n+" acceptance criteria: probably too big for one task (30 agent calls, about 14 work items). Split it: keep the first part here and start new requests for the rest."));}
   if(!sub){const save=el("button",{style:"margin:6px 6px 0 0"},"Save draft"),disc=el("button",{style:"margin:6px 6px 0 0"},"Discard my edits");
     save.disabled=!dirty.length;disc.disabled=!dirty.length;
     save.onclick=async()=>{const d={};FIELDS.forEach(([f])=>{const k=sid+":"+f;d[f]=fromText(f,k in typed?typed[k]:toText(v.draft,f));});
@@ -302,6 +304,9 @@ function runCard(t,hasReview){
     else if((st==="waiting_approval"||st==="needs_approval")&&hasReview&&r.blocker_needs_you)c.append(el("div",{},el("span",{class:"warn"},"The result is ready for your review: "),btn("Go to the review",()=>document.getElementById("review").scrollIntoView({behavior:"smooth"}),true)));
     else if(st==="waiting_approval"||st==="needs_approval")c.append(el("div",{},el("span",{class:"warn"},r.blocker),btn("Open Approvals",()=>go("approvals"),true)));
     else if(r.blocker)c.append(el("div",{class:r.blocker_needs_you?"mut":"warn"},r.blocker));}
+  if(r.can_edit_requirement&&r.requirement&&!reqEdit[id]){const e=btn("Narrow or correct the requirement (revision "+r.req_revision+")",()=>{reqEdit[id]=true;tick();});
+    c.append(el("div",{},e,el("span",{class:"mut small"},"Answers only add a constraint; this changes the criteria themselves (before anything is built).")));}
+  if(reqEdit[id]&&r.requirement)c.append(requirementEditor(id,r));
   if(!["done","rejected","stopped"].includes(st)){const row=el("div",{style:"margin-top:8px"});
     if(st!=="paused")row.append(btn("Pause",()=>send("/api/control",{task_id:id,action:"pause"},"Pause requested.")));
     row.append(btn("Stop",()=>send("/api/control",{task_id:id,action:"stop"},"Stop requested. Resume continues from the last checkpoint.")),
@@ -347,6 +352,29 @@ function reviewCard(v){
     el("ul",{style:"margin:2px 0"},...v.files.map(f=>el("li",{},el("code",{},f.path),el("span",{class:"ok"}," +"+f.added),el("span",{class:"bad"}," -"+f.removed))))));
   if(v.diff){const d=el("details",{style:"margin-top:6px"},el("summary",{},"Show the diff"+(v.diff_cut?" (first part only - the patch files hold all of it)":"")+" - the page stops refreshing while it is open"),diffPre(v.diff));c.append(d);}
   return c;}
+// Narrow or correct a task's requirement before anything is built (seen live: T-0025 was too big for one task and
+// answers could only ADD constraints, so the Architect kept asking). Saving = a new revision the Architect plans from.
+const reqEdit={};
+const TASK_CRITERIA_HINT=12;   // 30 calls allow about 14 work items: more criteria than this rarely fit one task
+function requirementEditor(id,r){
+  const req=r.requirement,c=el("div",{class:"msg",style:"margin-top:8px"},el("b",{},"Requirement revision "+r.req_revision+" - edit, then save as revision "+(r.req_revision+1)));
+  c.append(el("div",{class:"mut small"},"Keep only what THIS task should build; move the rest to new tasks (New task tab). One task holds about "+TASK_CRITERIA_HINT+" acceptance criteria. Delete 'Clarification from the user' lines that no longer apply."));
+  c.append(el("details",{},el("summary",{},"Current criteria by number ("+req.acceptance_criteria.length+")"),
+    el("ol",{style:"margin:2px 0"},...req.acceptance_criteria.map((x,i)=>el("li",{dir:"auto",class:"small"},el("b",{},"AC"+(i+1)+" "),x)))));
+  const keys=FIELDS.map(([f])=>"req:"+id+":"+f),count=el("div",{class:"small"});
+  const updCount=()=>{const n=fromText("acceptance_criteria",typed["req:"+id+":acceptance_criteria"]??toText(req,"acceptance_criteria")).length;
+    count.textContent=n+" acceptance criteria"+(n>TASK_CRITERIA_HINT?" - probably too many for one task: split it":"");count.className="small "+(n>TASK_CRITERIA_HINT?"warn":"mut");};
+  FIELDS.forEach(([f,label,rows])=>{const k="req:"+id+":"+f,t=el("textarea",{rows:f==="acceptance_criteria"?8:rows,dir:"auto","data-key":k,style:"width:100%"});
+    t.value=k in typed?typed[k]:toText(req,f);t.oninput=()=>{typed[k]=t.value;if(f==="acceptance_criteria")updCount();};
+    c.append(el("div",{style:"margin-top:6px"},el("b",{},label)),t);if(f==="acceptance_criteria")c.append(count);});
+  updCount();
+  const save=el("button",{class:"primary",style:"margin:8px 6px 0 0"},"Save as revision "+(r.req_revision+1)),cancel=el("button",{style:"margin:8px 6px 0 0"},"Cancel");
+  save.onclick=async()=>{save.disabled=true;const d={};FIELDS.forEach(([f])=>{const k="req:"+id+":"+f;d[f]=fromText(f,k in typed?typed[k]:toText(req,f));});
+    const x=await post("/api/task/requirement",{task_id:id,requirement:d});
+    if(x.ok){keys.forEach(k=>delete typed[k]);delete reqEdit[id];taskNote={cls:"ok",text:"Saved revision "+x.body.revision+". Press Continue: the Architect plans it from scratch."};}
+    else taskNote={cls:"bad",text:"Not saved: "+x.body.error};tick();};
+  cancel.onclick=()=>{keys.forEach(k=>delete typed[k]);delete reqEdit[id];tick();};
+  c.append(save,cancel);return c;}
 function answerBox(id,question){
   const k="ans:"+id,t=el("textarea",{rows:3,dir:"auto","data-key":k,"aria-label":"Your answer",placeholder:"Your answer (up to 300 characters)",style:"width:100%;margin-top:6px"});
   t.value=typed[k]||"";const cnt=el("span",{class:"mut"}),b=el("button",{class:"primary",style:"margin-top:6px"},"Send answer and continue");

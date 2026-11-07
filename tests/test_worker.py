@@ -60,6 +60,7 @@ class HeartbeatTests(WorkerBase):
     def test_the_task_view_shows_the_agent_of_a_live_run(self):
         orchestrator.submit("T-0005", requirements=REQ)
         (self.home / "tasks/T-0005/state.json").write_text(json.dumps({"state": "build", "current_agent": "developer"}))
+        (self.home / "tasks/T-0005/progress.json").write_text("{}")                 # a run already started it
         with worker.Heartbeat("worker") as hb:
             hb.set_job("task", "T-0005")
             self.assertIn("T-0005: developer", worker.status()["text"])
@@ -239,6 +240,51 @@ class ControlTests(WorkerBase):
         worker.request_run("T-0001", "continue")
         self.assertEqual(self.step(f)["status"], "waiting_approval")
         self.assertEqual(calls.count("architect"), 1)                          # the plan was not made again
+
+
+class RequirementEditTests(WorkerBase):
+    """Seen live (T-0025): too big for one task; answers only ADD constraints, so the Architect asked round after round.
+    The human narrows the requirement itself: a new revision, planned from scratch."""
+    BIG = dict(REQ, acceptance_criteria=[f"criterion {i}" for i in range(1, 27)])
+
+    def test_narrowing_a_stuck_task_makes_a_new_revision_the_architect_plans(self):
+        orchestrator.submit("T-0001", requirements=self.BIG)
+        worker.request_run("T-0001")
+        self.assertEqual(self.step(fb(architect=NEEDS))["status"], "needs_input")
+        self.assertTrue(dd.task_detail("T-0001")["run"]["can_edit_requirement"])
+        small = dict(REQ, acceptance_criteria=["criterion 1", "criterion 3"])
+        code, body = actions.handle_post("/api/task/requirement", {"task_id": "T-0001", "requirement": small}, H)
+        self.assertEqual(code, 200, body); self.assertEqual(body["revision"], 2)
+        e = orchestrator.load_entry("T-0001")
+        self.assertEqual(e["status"], "queued"); self.assertEqual(e["requirements"]["acceptance_criteria"], ["criterion 1", "criterion 3"])
+        hist = json.loads((self.home / "tasks/T-0001/requirement_history.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(hist[0]["requirement"]["acceptance_criteria"]), 26)             # the old revision is kept
+        seen = []
+
+        def arch(prompt):
+            seen.append(json.loads(prompt)["requirements"]["acceptance_criteria"])
+            from tests.helpers import plan
+            return plan(1, covers=("AC1", "AC2"))
+        worker.request_run("T-0001", "continue")
+        self.assertEqual(self.step(fb(architect=arch, developer=self.dev("T-0001")))["status"], "waiting_approval")
+        self.assertEqual([c["text"] for c in seen[0]], ["criterion 1", "criterion 3"])         # planned from revision 2
+
+    def test_no_edit_once_something_was_built(self):
+        orchestrator.submit("T-0001", requirements=REQ)
+        worker.request_run("T-0001")
+        self.step(fb(developer=self.dev("T-0001")))                                            # built and waiting for review
+        e = orchestrator.load_entry("T-0001"); e["status"] = "blocked"; orchestrator.save_entry(e)
+        self.assertFalse(dd.task_detail("T-0001")["run"]["can_edit_requirement"])
+        code, body = actions.handle_post("/api/task/requirement", {"task_id": "T-0001", "requirement": REQ}, H)
+        self.assertEqual(code, 400); self.assertIn("start a new task", body["error"])
+
+    def test_bad_input_is_refused(self):
+        orchestrator.submit("T-0001", requirements=REQ)
+        bad = dict(REQ, acceptance_criteria=[])
+        self.assertEqual(actions.handle_post("/api/task/requirement", {"task_id": "T-0001", "requirement": bad}, H)[0], 400)
+        self.assertEqual(actions.handle_post("/api/task/requirement", {"task_id": "T-0404", "requirement": REQ}, H)[0], 404)
+        with orchestrator._Lock("T-0001"):
+            self.assertEqual(actions.handle_post("/api/task/requirement", {"task_id": "T-0001", "requirement": REQ}, H)[0], 409)
 
 
 class BlockerConsistencyTests(WorkerBase):

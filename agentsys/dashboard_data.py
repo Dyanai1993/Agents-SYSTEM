@@ -102,7 +102,7 @@ def _attention(task_id, d, st, idle_min, live=None):
         return "warn", "review the requirement draft: approve or reject it" + (
             " - it has a BLOCKING question" if "blocking question" in note else "")
     if status == "queued":
-        started = state not in (None, "intake") or (d / "progress.json").exists()
+        started = (d / "progress.json").exists()          # the same rule as the Run card's Start / Continue button
         return "warn", ("not running: press Continue to resume from its last checkpoint" if started else "queued: press Start")
     if status == "stopped":
         return "warn", "stopped: press Resume to continue from the last checkpoint"
@@ -344,7 +344,12 @@ def run_view(task_id, live=None):
     why, hard = scheduler.run_blocker(entry)
     ctl = _json(config.home() / "tasks" / task_id / "control.json") or {}
     applied = {"stop": "stopped", "pause": "paused"}.get(ctl.get("action"))
-    return {"status": entry["status"], "note": entry.get("note", ""), "running": task_id in live,
+    edit_why = "it is running" if task_id in live else (
+        orchestrator.requirement_edit_blocker(task_id, entry) if entry["status"] in ("needs_input", "blocked", "queued", "stopped", "paused")
+        else "only before anything is built, while the task waits")
+    return {"requirement": entry.get("requirements"), "req_revision": entry.get("req_revision") or 1,
+            "can_edit_requirement": edit_why is None, "edit_blocker": edit_why,
+            "status": entry["status"], "note": entry.get("note", ""), "running": task_id in live,
             "request": worker.get_request(task_id), "blocker": why, "blocker_needs_you": hard,
             "control": ctl.get("action"), "control_pending": bool(applied) and entry["status"] != applied and task_id in live,
             "started": (config.home() / "tasks" / task_id / "progress.json").exists()}

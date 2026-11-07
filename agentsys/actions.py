@@ -58,6 +58,14 @@ def handle_post(path, body, headers):
                 return 404, {"error": str(e).strip("'\"")}
         if path in ("/api/task/run", "/api/task/answer"):
             return _task_action(path, body)
+        if path == "/api/task/requirement":
+            try:
+                e = orchestrator.edit_requirement(str(body.get("task_id", "")), body.get("requirement"))
+                return 200, {"task_id": e["task_id"], "revision": e["req_revision"], "note": e["note"]}
+            except orchestrator.TaskBusy as e:
+                return 409, {"error": f"{e}: wait until the current run ends"}
+            except KeyError as e:
+                return 404, {"error": str(e).strip("'\"")}
         if path == "/api/task/delete":
             try:
                 return 200, orchestrator.delete_task(str(body.get("task_id", "")))
