@@ -64,7 +64,15 @@ let view="overview";
 const m=document.getElementById("m");
 const el=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k==="class")e.className=a[k];else e.setAttribute(k,a[k]);}c.flat().forEach(x=>e.append(x instanceof Node?x:document.createTextNode(String(x??""))));return e;};
 const get=async u=>(await fetch(u)).json();
-const post=async(u,b)=>{const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json","X-Agentsys":"1"},body:JSON.stringify(b)});return {ok:r.ok,body:await r.json()};};
+// Every action goes through here. Seen live: a click while the server was restarting threw a network error, nothing was
+// shown, and the button looked untouched after the next refresh - the user believed Start was pressed. Now every failure
+// comes back as {ok:false, body:{error}} with what to do; `unknown` = the request may or may not have arrived.
+const post=async(u,b)=>{let r;
+  try{r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json","X-Agentsys":"1"},body:JSON.stringify(b)});}
+  catch(e){return {ok:false,unknown:true,body:{error:"No answer from the dashboard server - is up.py running? Nothing may have been saved: check the status below, then try again."}};}
+  let body;try{body=await r.json();}catch(e){body={error:"The server answered "+r.status+" without details."};}
+  if(!r.ok&&r.status===404&&body.error==="not found")body.error="This dashboard server does not know this action - it runs old code: restart up.py.";
+  return {ok:r.ok,body};};
 const stCls=s=>["done"].includes(s)?"ok":["blocked","failed"].includes(s)?"bad":"";
 function bar(p){const b=el("div",{class:"bar"}),i=el("i");i.style.width=Math.min(100,Math.round(p*100))+"%";b.append(i);return b;}
 // Typed text survives the 2.5 s re-render: every text box is rebuilt from this map.
