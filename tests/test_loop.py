@@ -121,6 +121,37 @@ class LoopTests(TmpHome):
         from agentsys import dashboard_data as dd
         self.assertTrue([e for e in dd.all_events("t1")[0] if "incomplete" in e["summary"]])
 
+    def test_a_misquoted_command_gets_one_redo_instead_of_blocking_the_task(self):
+        """Seen live (T-0023, T-0025): the tester reported `cd ... && grep ...` but had run `grep ... plan.html`. The
+        evidence rule rightly rejected it - and one misquote blocked the whole task. Now: one redo, told why."""
+        log = {"tester": [{"tool": "Bash", "command": "python -m unittest", "output": "OK", "is_error": False}]}
+
+        def misquoted(prompt):
+            _, ids, _ = _item(prompt)
+            return report("pass", [_check("all", "pass", ids, command="cd /x && python -m unittest -v", evidence="XYZ")])
+
+        def exact(prompt):
+            p = json.loads(prompt)
+            assert "errors" in p["rejection"] and "evidence" in p["rejection"]["errors"], p.get("rejection")
+            return t_pass(prompt)
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": [misquoted, exact, t_pass]}, tool_logs=log)
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "ready_for_review", r["message"])
+        self.assertEqual(roles(fb).count("tester"), 3)               # item (misquote + redo) + final
+        from agentsys import dashboard_data as dd
+        self.assertTrue([e for e in dd.all_events("t1")[0] if "asking once to redo it" in e["summary"]])
+
+    def test_a_tester_that_misquotes_twice_still_blocks(self):
+        log = {"tester": [{"tool": "Bash", "command": "python -m unittest", "output": "OK", "is_error": False}]}
+
+        def misquoted(prompt):
+            _, ids, _ = _item(prompt)
+            return report("pass", [_check("all", "pass", ids, command="cd /x && python -m unittest -v", evidence="XYZ")])
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": misquoted}, tool_logs=log)
+        r = go("t1", fb)
+        self.assertEqual(r["status"], "blocked"); self.assertIn("semantic_validation", r["message"])
+        self.assertEqual(roles(fb).count("tester"), 2)               # exactly one redo, never a loop
+
     def test_tester_that_stays_incomplete_ends_in_needs_input_after_exactly_two_tries(self):
         def forgetful(prompt):
             _, ids, _ = _item(prompt)

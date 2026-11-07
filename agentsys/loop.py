@@ -497,7 +497,23 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
 
         # Each call is guarded on its own. Phase 5 review (round 2): with one check around both calls, a tester
         # could change a product file in the first call and put it back in the second, unseen.
-        rep, start = guarded_call("tester", lambda: agent("tester", payload, post_process=post), keep_qa=True)
+        try:
+            rep, start = guarded_call("tester", lambda: agent("tester", payload, post_process=post), keep_qa=True)
+        except StepFailed as e:
+            # A report whose evidence does not match the tool log (or that breaks the report format) is rejected - the
+            # check that catches invented evidence must stay strict. But seen live (T-0023, T-0025): one misquoted
+            # command (a `cd ... &&` prefix added afterwards, a file name dropped) blocked the whole task for a human.
+            # Ask the tester ONCE to run the checks again and report exactly what it ran; a second failure blocks.
+            msg = str(e)
+            if not msg.startswith(("tester: semantic_validation:", "tester: schema_validation:")):
+                raise
+            logger.log_event(task_id, "orchestrator", "decision", "tester report rejected by the evidence/format rules: asking once to redo it",
+                             status="pending", payload={"error": msg[:1500]})
+            rep, start = guarded_call("tester", lambda: agent("tester", dict(payload, rejection={"errors": msg[:1500], "instruction":
+                                      "Your previous report was rejected for the reason in `errors`. Run every check again now. For each check, "
+                                      "`command` is EXACTLY one command as you ran it (no `cd` prefix added afterwards, no file name dropped), "
+                                      "and `evidence` is copied from that command's real output. One scenario per check."}), post_process=post),
+                                      keep_qa=True)
         # A report that only MISSES coverage (nothing skipped, nothing failed) is a tester omission, not a question
         # for the user. Ask the tester once to complete it. One extra call is cheaper than stopping the whole task.
         if rep["verdict"] == "blocked" and rep.get("gaps") and not any(c["result"] == "skipped" for c in rep["checks"]):
