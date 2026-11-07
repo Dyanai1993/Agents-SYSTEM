@@ -162,3 +162,12 @@ requirements had no quality criteria. Changed, with no extra calls per task:
   accessibility) for anything a person will use.
 Not yet measured: no eval run (it costs quota). The next live task is the first evidence. Further levers, not taken
 yet: a visual review gate with screenshots, Opus for Architect/Developer, a larger budget per task.
+
+## Skills: expert playbooks (2026-11-07, the owner: "add strong dev and architect skills to the agents")
+- `agentsys/playbooks/*.md`: senior-level guidance per kind of work - architecture, React + TypeScript front ends,
+  UI design, Python, testing - reviewed in git like the prompts.
+- `agentsys/skills.py` picks them by code for each call: the role (architecture is always given to the Architect,
+  testing always to the Developer and the Tester) plus whole-word keyword matches in the requirement, the plan and
+  the work item. At most 3 per call and 16,000 characters. They go into the input as `playbooks`; the prompts say
+  they never override the criteria, the constraints, the rules or the output format. Security keeps its own rules.
+- Cost: a few thousand input tokens per call, no extra calls. Not measured live yet.

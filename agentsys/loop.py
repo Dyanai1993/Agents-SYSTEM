@@ -19,7 +19,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import approvals, billing_guard, config, control, logger, memory, runner, schema, semantics, tasks
+from . import approvals, billing_guard, config, control, logger, memory, runner, schema, semantics, skills, tasks
 from .ledger import BudgetExceeded, Ledger, Window, estimate_task_units
 
 QA_DIR = "qa_tests"
@@ -404,6 +404,9 @@ def _run(task_id, tdir, req, backend, title, env, settings_paths, limits, seed=N
         lessons = memory.retrieve(role, req["goal"])          # <= 5 short hints, plain text
         if lessons:
             payload = dict(payload, lessons=lessons)
+        books = skills.select(role, json.dumps([req, payload], ensure_ascii=False))   # expert playbooks, chosen by code
+        if books:
+            payload = dict(payload, playbooks=books)
         res = runner.run_agent(role, payload, task_id=task_id, run_id=f"r{prog['runs']}", backend=backend, cwd=str(ws),
                                env=env, settings_paths=settings_paths, limits=limits, post_process=post_process)
         if not res.ok:
