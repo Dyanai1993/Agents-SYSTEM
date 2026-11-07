@@ -74,6 +74,17 @@ class SingleWorkerTests(WorkerBase):
             with self.assertRaises(worker.AlreadyRunning):
                 worker.run_forever(backend=runner.FakeBackend({}), should_stop=lambda: True)
 
+    def test_a_killed_workers_heartbeat_is_forgotten_by_the_next_worker(self):
+        """Seen live: the old worker was killed before removing its file, and for 20 s the page said '2 workers'."""
+        dead = worker.Heartbeat("worker")
+        dead.beat()                                          # fresh file, but its process is gone (no lock held)
+        run = worker.Heartbeat("run-next")
+        run.beat()
+        seen = []
+        worker.run_forever(backend=runner.FakeBackend({}), should_stop=lambda: seen.append(worker.status()) or True)
+        self.assertFalse(dead.path.exists()); self.assertTrue(run.path.exists())      # run-next is not a worker
+        self.assertNotIn("2 workers", seen[0]["text"])
+
     def test_run_forever_stops_and_cleans_up(self):
         worker.run_forever(backend=runner.FakeBackend({}), should_stop=lambda: True)
         self.assertEqual(list((self.home / "state" / "workers").glob("*.json")), [])

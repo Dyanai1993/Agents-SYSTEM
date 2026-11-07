@@ -190,6 +190,17 @@ def clean_stale(now=None):
             pass
 
 
+def _forget_dead_workers():
+    """Called while holding the single-worker lock, which proves every other WORKER heartbeat belongs to a dead process.
+    Seen live: up.py's Ctrl+C killed the old worker before it could remove its file, so for 20 s after the restart the
+    dashboard said "2 workers are running". run-next heartbeats are left alone (they do not take this lock)."""
+    for p in _wdir().glob("worker-*.json") if _wdir().is_dir() else []:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------- run requests (Start / Continue from the dashboard)
 def _rdir():
     return config.home() / "requests" / "run"
@@ -312,6 +323,7 @@ def run_forever(*, backend, poll_s=2, log=print, should_stop=None):
         raise AlreadyRunning("another worker is already running: use that one (the dashboard shows it), or stop it first")
     try:
         clean_stale()
+        _forget_dead_workers()
         with Heartbeat("worker") as hb:
             while not (should_stop and should_stop()):
                 try:

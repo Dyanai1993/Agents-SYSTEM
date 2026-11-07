@@ -56,6 +56,11 @@ try:
 except KeyboardInterrupt:
     print("stopping...", flush=True)
 finally:
+    # Ctrl+C reached both children too: give them time to stop cleanly (the worker removes its heartbeat and leaves
+    # no half-written state) before forcing them. Seen live: an immediate terminate left a fresh heartbeat behind.
+    deadline = time.time() + 10
+    while time.time() < deadline and any(p.poll() is None for p in procs.values()):
+        time.sleep(0.2)
     for p in procs.values():
         if p.poll() is None:
             p.terminate()
