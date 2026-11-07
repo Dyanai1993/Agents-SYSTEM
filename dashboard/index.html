@@ -256,7 +256,17 @@ async function assistantView(auto){
       list("Acceptance criteria",d.acceptance_criteria),list("Constraints",d.constraints),list("Assumptions",d.risks),list("Open questions (none blocking)",d.unknowns.map(u=>u.question)));
     if(reviewOpen[sid]!==v.revision){ok.disabled=true;exact.append(el("div",{class:"warn"},"The draft changed since you opened this review: review it again."));}
     ok.onclick=async()=>{ok.disabled=true;const r=await post("/api/assistant/submit",{session:sid,revision:v.revision});if(!r.ok)flash["d:"+sid]={cls:"bad",text:r.body.error};delete reviewOpen[sid];tick();};
-    cancel.onclick=()=>{delete reviewOpen[sid];tick();};rd.append(exact,ok,cancel);}
+    // Seen live: "nothing runs" - a ready draft still needed Approve and submit, then Start in another tab. One click:
+    // the same submission, then a Start request for the worker (still files only; the worker makes the calls).
+    const go=el("button",{class:"primary",style:"margin:6px 6px 0 0"},"Approve, submit and start");go.disabled=ok.disabled;
+    go.onclick=async()=>{go.disabled=ok.disabled=true;const r=await post("/api/assistant/submit",{session:sid,revision:v.revision});
+      if(!r.ok){flash["d:"+sid]={cls:"bad",text:r.body.error};delete reviewOpen[sid];tick();return;}
+      const s2=await post("/api/task/run",{task_id:r.body.task_id,action:"start"});delete reviewOpen[sid];
+      if(s2.ok){taskNote={cls:"ok",text:"Submitted as "+r.body.task_id+" and started: the worker picks it up now."};openTask(r.body.task_id);}
+      else{flash["d:"+sid]={cls:"bad",text:"Submitted as "+r.body.task_id+", but it did not start: "+s2.body.error};tick();}};
+    ok.className="";ok.textContent="Approve and submit only";
+    if(!v.project)exact.append(el("div",{class:"warn",style:"margin-top:6px"},"No project repository chosen: a NEW, empty repository is created for this task. For a follow-up of an earlier task, choose its repository first (above)."));
+    cancel.onclick=()=>{delete reviewOpen[sid];tick();};rd.append(exact,go,ok,cancel);}
   dc.append(rd);
   wrap.append(conv,dc);m.append(wrap);
   log.scrollTop=!prev||prev.bottom||prev.n!==log.dataset.n?log.scrollHeight:prev.top;   // follow new messages; keep your place if you scrolled up
