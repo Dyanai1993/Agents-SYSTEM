@@ -61,7 +61,94 @@ def save_entry(entry):
     tmp.replace(p)
 
 
-def submit(task_id, *, request_text=None, requirements=None, title=None, target_repo=None, priority=5, origin=None):
+def project_check(path, ref=None):
+    """A local git repository a task builds on: (top-level path, ref, commit sha), or ValueError with a plain reason.
+    Master prompt follow-up: tasks used to start from an empty workspace, so a later task could not build on an
+    earlier one's code. The agents never touch this repository - only a copy of one of its commits."""
+    raw = str(path or "").strip().strip('"')
+    if not raw:
+        raise ValueError("give the full path of the project repository")
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        raise ValueError("give the FULL path of the project repository, e.g. C:\\Users\\you\\Projects\\FirstWords")
+    if not p.is_dir():
+        raise ValueError(f"{p} does not exist")
+    if loop._git(p, "rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
+        raise ValueError(f"{p} is not a git repository (run `git init` there and make a first commit)")
+    top = loop._git(p, "rev-parse", "--show-toplevel").stdout.strip() or str(p)
+    ref = str(ref or "").strip() or loop._git(p, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    if not ref or ref.startswith("-") or any(c in ref for c in " \t\n\\:?*[~^"):
+        raise ValueError(f"'{ref}' is not a branch name")
+    sha = loop._git(p, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}").stdout.strip()
+    if not sha:
+        raise ValueError(f"no commit at '{ref}' in {top}" + (" - the repository has no commits yet: make a first commit "
+                         "(for example a README) so the agents have something to start from" if ref == "HEAD" else ""))
+    return str(Path(top)), ref, sha
+
+
+def _export_commit(repo, sha, dest):
+    """The files of one commit (tracked files only, no .git, nothing untracked) into `dest`, for a task workspace."""
+    import io
+    import tarfile
+    dest.mkdir(parents=True, exist_ok=True)
+    if not loop._git(repo, "ls-tree", "--name-only", sha).stdout.strip():
+        return dest                                      # an empty commit (git commit --allow-empty): nothing to copy
+    r = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", sha], capture_output=True)
+    if r.returncode:
+        raise ValueError(f"cannot read commit {sha[:12]} of {repo}: {r.stderr.decode('utf-8', 'replace').strip()[:200]}")
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tf:
+        tf.extractall(dest, filter="data")               # refuses absolute paths and '..' in the archive
+    return dest
+
+
+def create_project_repo(task_id, title, goal=""):
+    """A new local git repository for a new task (the owner's choice: one per task, unless an existing one is picked):
+    <projects_dir>/<task>-<slug>, branch main, a README and a .gitignore in a first commit. Returns its path.
+    Nothing is pushed anywhere; the delivery adds the branch agentsys/<task> here."""
+    import re as _re
+    logger.safe_task_id(task_id)
+    slug = _re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")[:40].strip("-") or "project"
+    root = config.projects_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    path, n = root / f"{task_id}-{slug}", 2
+    while path.exists():
+        path, n = root / f"{task_id}-{slug}-{n}", n + 1
+    path.mkdir()
+    loop._git(path, "init", "-q")
+    loop._git(path, "symbolic-ref", "HEAD", "refs/heads/main")          # main, whatever the local git default is
+    (path / "README.md").write_text(f"# {title or task_id}\n\nCreated by Agents-SYSTEM for task {task_id}.\n\n{goal}\n", encoding="utf-8")
+    (path / ".gitignore").write_text("__pycache__/\n*.pyc\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\nnode_modules/\n.venv/\n.DS_Store\n",
+                                     encoding="utf-8")
+    loop._git(path, "add", "-A")
+    if loop._git(path, "commit", "-q", "-m", f"Start: {title or task_id} ({task_id})").returncode:
+        raise RuntimeError(f"could not make the first commit in {path}")
+    return str(path)
+
+
+def set_project(task_id, path, ref=None):
+    """Set (or with an empty path, clear) the project repository of a task that has not started yet: its workspace
+    is a copy taken at the start, so the choice cannot change afterwards."""
+    task_id = logger.safe_task_id(task_id)
+    with _Lock(task_id):
+        e = load_entry(task_id)
+        if e is None:
+            raise KeyError(f"no task {task_id}")
+        if (config.home() / "tasks" / task_id / "workspace" / ".git").exists():
+            raise ValueError("this task already started from its own workspace: set the project repository on a new task")
+        if str(path or "").strip():
+            repo, ref, sha = project_check(path, ref)
+            e.update(target_repo=repo, base_ref=ref)
+            note = f"project repository {repo} @ {ref} ({sha[:10]})"
+        else:
+            e.update(target_repo=None, base_ref=None)
+            note = "no project repository: it starts empty and delivers patch files only"
+        save_entry(e)
+        logger.log_event(task_id, "human", "decision", note, status="ok")
+        return e
+
+
+def submit(task_id, *, request_text=None, requirements=None, title=None, target_repo=None, priority=5, origin=None, base_ref=None):
     logger.safe_task_id(task_id)
     if load_entry(task_id):
         raise ValueError(f"task {task_id} already exists")
@@ -71,7 +158,7 @@ def submit(task_id, *, request_text=None, requirements=None, title=None, target_
         schema.validate("requirements", requirements)
     entry = {"task_id": task_id, "title": title or tasks.short_title((requirements or {}).get("goal") or request_text), "status": "queued",
              "priority": priority, "created_at": logger.now(), "request_text": request_text, "requirements": requirements,
-             "target_repo": str(target_repo) if target_repo else None, "resume_after": None, "note": "",
+             "target_repo": str(target_repo) if target_repo else None, "base_ref": base_ref or None, "resume_after": None, "note": "",
              "origin": origin}                 # e.g. {"draft_session": "D-0001", "revision": 3}: the Requirements Assistant
     save_entry(entry)
     tasks.set_state(task_id, "intake", title=entry["title"])
@@ -215,7 +302,7 @@ def approved_sha(diff_ref):
     return parts[1] if ok else None
 
 
-def deliver(task_id, target_repo=None, commit=None, approval_id=None):
+def deliver(task_id, target_repo=None, commit=None, approval_id=None, branch_from=None):
     """Export the workspace history up to `commit` (the APPROVED commit; HEAD when not given) as patches;
     optionally apply them on a NEW branch of a target repo. Returns the delivery receipt.
 
@@ -297,7 +384,10 @@ def deliver(task_id, target_repo=None, commit=None, approval_id=None):
         if loop._git(repo, "status", "--porcelain").stdout.strip():
             raise RuntimeError(f"target repo {repo} has uncommitted changes: not touching it")
         jpath.write_text(json.dumps({"target_repo": str(repo), "branch": branch, "orig_branch": orig_branch, "ws_sha": ws_sha, "state": "creating"}), encoding="utf-8")
-        if loop._git(repo, "checkout", "-q", "-b", branch).returncode:
+        # A task that started from this repository branches from the exact commit its workspace was copied from, so its
+        # patches apply cleanly even if the repository moved on since; otherwise from the current HEAD.
+        start = [branch_from] if branch_from and not loop._git(repo, "cat-file", "-e", f"{branch_from}^{{commit}}").returncode else []
+        if loop._git(repo, "checkout", "-q", "-b", branch, *start).returncode:
             raise RuntimeError(f"cannot create branch {branch} in {repo}")
         am = loop._git(repo, "am", "-q", *[str(out / p) for p in patches])
         if am.returncode:
@@ -499,6 +589,8 @@ def delete_task(task_id):
                 p.replace(dest / "approvals" / kind / p.name)
         if q.exists():
             q.replace(dest / "queue.json")
+    from . import worker
+    worker.cancel_run(task_id)                         # a pending Start/Continue for a deleted task is void
     return {"task_id": task_id, "moved_to": str(dest)}
 
 
@@ -547,8 +639,28 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
         req = intake.draft(task_id)
     entry["requirements"] = req
 
+    # ---- a project repository: the workspace starts as a copy of its chosen commit (once, at the first run)
+    seed = None
+    if entry.get("target_repo") and not (tdir / "workspace" / ".git").exists():
+        import shutil
+        try:
+            repo, ref, sha = project_check(entry["target_repo"], entry.get("base_ref"))
+            shutil.rmtree(tdir / ".seed", ignore_errors=True)
+            seed = _export_commit(repo, sha, tdir / ".seed")
+        except ValueError as e:
+            tasks.set_state(task_id, "blocked", title=entry["title"])
+            return finish("blocked", f"project repository: {e}")
+        entry["project_base"] = {"repo": repo, "ref": ref, "sha": sha}
+        save_entry(entry)
+        logger.log_event(task_id, "orchestrator", "decision", f"workspace starts from {repo} @ {ref} ({sha[:10]})", status="ok")
+
     # ---- core loop (resumes from progress.json)
-    res = loop.run_task(task_id, req, backend=backend, title=entry["title"], **kw)
+    try:
+        res = loop.run_task(task_id, req, backend=backend, title=entry["title"], seed=seed, **kw)
+    finally:
+        if seed is not None:
+            import shutil
+            shutil.rmtree(seed, ignore_errors=True)
     if res["status"] != "paused":
         try:
             memory.extract_lessons(task_id)           # facts -> lessons, no LLM; never breaks the run
@@ -575,7 +687,8 @@ def _process(task_id, *, backend, env=None, settings_paths=None):
     if r is not None:
         return r
     try:
-        d = deliver(task_id, entry["target_repo"], commit=approved_sha(ap.get("diff_ref")), approval_id=ap["id"])
+        d = deliver(task_id, entry["target_repo"], commit=approved_sha(ap.get("diff_ref")), approval_id=ap["id"],
+                    branch_from=(entry.get("project_base") or {}).get("sha"))
     except RuntimeError as e:
         tasks.set_state(task_id, "blocked", title=entry["title"])
         return finish("blocked", f"delivery failed: {e}")

@@ -10,6 +10,16 @@ def home() -> Path:
     return Path(os.environ.get("AGENTSYS_HOME") or _DEFAULT_HOME)
 
 
+def projects_dir() -> Path:
+    """Where a new task's own git repository is created. AGENTSYS_PROJECTS wins; with a separate data folder
+    (AGENTSYS_HOME: tests, demos) it is inside that folder, so they never touch the real ~/Projects."""
+    if os.environ.get("AGENTSYS_PROJECTS"):
+        return Path(os.environ["AGENTSYS_PROJECTS"])
+    if os.environ.get("AGENTSYS_HOME"):
+        return home() / "projects"
+    return Path.home() / "Projects"
+
+
 PLAN_TIER = "max5x"
 
 # Aliases work for both the SDK and `claude -p`.

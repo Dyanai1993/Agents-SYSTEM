@@ -86,8 +86,16 @@ class H(BaseHTTPRequestHandler):
         pass
 
 
+class QuietServer(ThreadingHTTPServer):
+    """A browser that closes a connection early (a reload, a closed tab) is normal: no traceback for that."""
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def main(port=8765):
-    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    srv = QuietServer(("127.0.0.1", port), H)
     print(f"Dashboard: http://127.0.0.1:{port}  (Ctrl+C to stop)")
     try:
         srv.serve_forever()

@@ -19,7 +19,7 @@ import json
 import re
 import time
 
-from . import billing_guard, config, logger, orchestrator, runner, schema
+from . import billing_guard, config, logger, orchestrator, runner, schema, tasks
 from .filelock import FileLock, LockBusy
 from .ledger import BudgetExceeded, Ledger
 
@@ -182,6 +182,22 @@ def readiness(s):
     return out                  # a waiting assistant turn does not block: a late reply never touches a submitted draft
 
 
+def set_project(sid, path, ref=None):
+    """The local git repository this request builds on (or none: an empty start, patch files only). Checked now, used
+    when the task starts. Not part of the requirement the model sees, and no model call."""
+    with _Locked(sid):
+        s = load(sid)
+        if s["submitted"]:
+            raise Conflict("this draft was already submitted: set the repository on the task (Task monitor)")
+        if str(path or "").strip():
+            repo, ref, _ = orchestrator.project_check(path, ref)
+            s["project"] = {"repo": repo, "ref": ref}
+        else:
+            s["project"] = None
+        _save(s)
+        return s
+
+
 def submit(sid, revision):
     """Approve revision `revision` and queue ONE task with exactly that requirement. Idempotent: the same approved
     revision always returns the same task, including a retry after an interrupted response."""
@@ -205,7 +221,16 @@ def submit(sid, revision):
         task_id, req = pend["task_id"], pend["requirements"]
         entry = orchestrator.load_entry(task_id)
         if entry is None:
-            orchestrator.submit(task_id, requirements=req, origin={"draft_session": sid, "revision": revision})
+            proj = s.get("project") or {}
+            repo, ref = proj.get("repo"), proj.get("ref")
+            if not repo:                                # the owner's rule: every new task gets its own new repository
+                repo = pend.get("repo")                 # created by an interrupted earlier attempt: reuse, never a second one
+                if not repo:
+                    repo = pend["repo"] = orchestrator.create_project_repo(task_id, tasks.short_title(req["goal"]), req["goal"])
+                    _save(s)
+                ref = "main"
+            orchestrator.submit(task_id, requirements=req, origin={"draft_session": sid, "revision": revision},
+                                target_repo=repo, base_ref=ref)
         elif (entry.get("origin") or {}).get("draft_session") != sid:
             raise Conflict(f"task id {task_id} was taken by another submission: contact the builder")
         (_root() / sid / f"approved-r{revision}.json").write_text(json.dumps(req, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -330,4 +355,5 @@ def view(sid):
     s = load(sid)
     task = orchestrator.load_entry(s["submitted"]["task_id"]) if s["submitted"] else None
     return dict(s, summary=summary(s), blockers=readiness(s), ready=not readiness(s),
-                task_status=task["status"] if task else ("deleted" if s["submitted"] else None))
+                task_status=task["status"] if task else ("deleted" if s["submitted"] else None),
+                projects_dir=str(config.projects_dir()), task_repo=(task or {}).get("target_repo"))

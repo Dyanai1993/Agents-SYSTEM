@@ -56,6 +56,11 @@ your message; running T-0025 with the developer for 12 min), or that it is offli
    writes the patch files to `deliveries/<task>/` (and a branch if a target repo was set) and shows a receipt with
    the patch names, the folder, the commit and how to apply them (`git am`). Nothing is merged into main.
 
+- **Every new task gets its own git repository** on your computer, in `C:\Users\<you>\Projects\<task>-<name>` (a README
+  and a first commit). The task builds from it; an approved delivery adds the branch `agentsys/<task>` there. Merging
+  and pushing to GitHub stay with you. For a follow-up task of the same project (FirstWords Task 2), choose "Use an
+  existing repository" in the draft (or in the Task monitor before it starts): it starts from that repository's code.
+  Command line: `submit ... --target-repo PATH [--branch B]`, or `--no-repo` for patch files only.
 - The worker is the only process that calls a model: it answers chat messages and runs the tasks you Start/Continue,
   never anything else, and makes no call while nothing waits. Only one worker can run. After updating the code,
   restart `up.py` (the header tells you when a process runs old code).

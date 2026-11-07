@@ -114,7 +114,8 @@ def _report_progress(cb, blk):
     try:
         kind = blk.get("type")
         if kind == "text" and str(blk.get("text", "")).strip():
-            cb({"kind": "say", "text": _mask(blk.get("text"), 240)})
+            txt = str(blk.get("text")).lstrip()          # the final JSON report is not narration
+            cb({"kind": "say", "text": "(writing its report)" if txt.startswith(("{", "```")) else _mask(txt, 240)})
         elif kind == "tool_use":
             i = blk.get("input") or {}
             detail = i.get("command") or i.get("file_path") or i.get("path") or i.get("pattern") or i.get("url") or ""

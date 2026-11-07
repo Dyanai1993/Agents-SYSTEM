@@ -228,6 +228,10 @@ async function assistantView(auto){
       if(r.ok){dirtyKeys(sid).forEach(k=>delete typed[k]);delete typed["base:"+sid];flash["d:"+sid]={cls:"ok",text:"Saved as revision "+r.body.revision+"."};}else flash["d:"+sid]={cls:"bad",text:r.body.error};tick();};
     disc.onclick=()=>{dirtyKeys(sid).forEach(k=>delete typed[k]);delete typed["base:"+sid];tick();};
     dc.append(save,disc);}
+  dc.append(projectRow("dproj:"+sid,sub?(v.task_repo?{repo:v.task_repo}:null):v.project,!sub,async(repo,ref)=>{const x=await post("/api/assistant/project",{session:sid,repo,ref});
+    flash["d:"+sid]=x.ok?{cls:"ok",text:repo?"The task will build on this existing repository.":"A new repository will be created for this task."}:{cls:"bad",text:"Not saved: "+x.body.error};return x;},null,
+    {emptyText:"a NEW git repository is created for this task when you submit, in "+v.projects_dir+" (the task builds there; an approved delivery adds the branch agentsys/<task>)",
+     chooseLabel:"Use an existing repository instead",clearLabel:"Use a new repository"}));
   dc.append(note("d:"+sid));
   if(v.suggestions.length)dc.append(list("Proposals in the draft (not confirmed by you)",v.suggestions,"warn"));
   if(v.conflicts.length)dc.append(list("Conflicts to resolve",v.conflicts,"bad"));
@@ -392,6 +396,7 @@ function runCard(t,hasReview){
     else if((st==="waiting_approval"||st==="needs_approval")&&hasReview&&r.blocker_needs_you)c.append(el("div",{},el("span",{class:"warn"},"The result is ready for your review: "),btn("Go to the review",()=>document.getElementById("review").scrollIntoView({behavior:"smooth"}),true)));
     else if(st==="waiting_approval"||st==="needs_approval")c.append(el("div",{},el("span",{class:"warn"},r.blocker),btn("Open Approvals",()=>go("approvals"),true)));
     else if(r.blocker)c.append(el("div",{class:r.blocker_needs_you?"mut":"warn"},r.blocker));}
+  if(r.project)c.append(projectRow("proj:"+id,r.project,r.project.editable,(repo,ref)=>post("/api/task/project",{task_id:id,repo,ref}),r.project.base));
   if(r.can_edit_requirement&&r.requirement&&!reqEdit[id]){const e=btn("Narrow or correct the requirement (revision "+r.req_revision+")",()=>{reqEdit[id]=true;tick();});
     c.append(el("div",{},e,el("span",{class:"mut small"},"Answers only add a constraint; this changes the criteria themselves (before anything is built).")));}
   if(reqEdit[id]&&r.requirement)c.append(requirementEditor(id,r));
@@ -439,6 +444,28 @@ function reviewCard(v){
   c.append(el("div",{style:"margin-top:8px"},el("b",{},"Changed files ("+v.files.length+")"),
     el("ul",{style:"margin:2px 0"},...v.files.map(f=>el("li",{},el("code",{},f.path),el("span",{class:"ok"}," +"+f.added),el("span",{class:"bad"}," -"+f.removed))))));
   if(v.diff){const d=el("details",{style:"margin-top:6px"},el("summary",{},"Show the diff"+(v.diff_cut?" (first part only - the patch files hold all of it)":"")+" - the page stops refreshing while it is open"),diffPre(v.diff));c.append(d);}
+  return c;}
+// Project repository: the local git repository a task builds on (its workspace starts as a copy of one commit) and
+// receives the branch agentsys/<task> on delivery. Merging and pushing stay with you. One form for drafts and tasks.
+const projOpen={};
+function projectRow(key,cur,editable,save,base,opts){opts=opts||{};
+  const c=el("div",{class:"small",style:"margin-top:8px"});
+  const shown=cur&&cur.repo?[el("b",{},"Project repository: "),el("code",{},cur.repo),cur.ref?el("span",{class:"mut"}," @ "+cur.ref):"",base?el("span",{class:"mut"}," - started from "+base.sha.slice(0,10)):""]
+    :[el("b",{},"Project repository: "),el("span",{class:"mut"},opts.emptyText||"none - it starts from an empty folder and delivers patch files only")];
+  c.append(...shown);
+  if(!editable)return c;
+  if(!projOpen[key]){const b=el("button",{class:"small",style:"margin-left:8px"},cur&&cur.repo?"Change":(opts.chooseLabel||"Choose a repository"));b.onclick=()=>{projOpen[key]=true;tick();};c.append(b);return c;}
+  const kp=key+":repo",kr=key+":ref";
+  const p=el("input",{"data-key":kp,"aria-label":"Repository path",placeholder:"C:\\Users\\you\\Projects\\FirstWords",style:"width:min(100%,420px);margin:6px 6px 0 0"});
+  const r=el("input",{"data-key":kr,"aria-label":"Branch",placeholder:"branch (empty = the checked-out one)",style:"width:220px;margin:6px 6px 0 0"});
+  p.value=kp in typed?typed[kp]:(cur&&cur.repo)||"";r.value=kr in typed?typed[kr]:(cur&&cur.ref)||"";
+  p.oninput=()=>{typed[kp]=p.value;};r.oninput=()=>{typed[kr]=r.value;};
+  const ok=el("button",{class:"primary small",style:"margin:6px 6px 0 0"},"Save"),clear=el("button",{class:"small",style:"margin:6px 6px 0 0"},opts.clearLabel||"No repository"),cancel=el("button",{class:"small",style:"margin:6px 6px 0 0"},"Cancel");
+  const done=()=>{delete typed[kp];delete typed[kr];delete projOpen[key];};
+  ok.onclick=async()=>{ok.disabled=true;const x=await save(p.value,r.value);if(x.ok){done();taskNote={cls:"ok",text:"Project repository saved."};}else taskNote={cls:"bad",text:"Not saved: "+x.body.error};tick();};
+  clear.onclick=async()=>{const x=await save("","");if(x.ok){done();taskNote={cls:"ok",text:"No project repository."};}else taskNote={cls:"bad",text:x.body.error};tick();};
+  cancel.onclick=()=>{done();tick();};
+  c.append(el("div",{},p,r),ok,clear,cancel,el("div",{class:"mut"},"A local git repository with at least one commit. The task starts from a copy of that branch; the agents never touch the repository itself. An approved delivery adds the branch agentsys/<task> there - merging and pushing stay with you."));
   return c;}
 // Narrow or correct a task's requirement before anything is built (seen live: T-0025 was too big for one task and
 // answers could only ADD constraints, so the Architect kept asking). Saving = a new revision the Architect plans from.

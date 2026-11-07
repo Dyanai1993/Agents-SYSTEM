@@ -350,7 +350,10 @@ def run_view(task_id, live=None):
     edit_why = "it is running" if task_id in live else (
         orchestrator.requirement_edit_blocker(task_id, entry) if entry["status"] in ("needs_input", "blocked", "queued", "stopped", "paused")
         else "only before anything is built, while the task waits")
-    return {"requirement": entry.get("requirements"), "req_revision": entry.get("req_revision") or 1,
+    started_ws = (config.home() / "tasks" / task_id / "workspace" / ".git").exists()
+    project = {"repo": entry.get("target_repo"), "ref": entry.get("base_ref"), "base": entry.get("project_base"),
+               "editable": not started_ws and task_id not in live and entry["status"] not in ("done", "rejected")}
+    return {"project": project, "requirement": entry.get("requirements"), "req_revision": entry.get("req_revision") or 1,
             "can_edit_requirement": edit_why is None, "edit_blocker": edit_why,
             "status": entry["status"], "note": entry.get("note", ""), "running": task_id in live,
             "request": worker.get_request(task_id), "blocker": why, "blocker_needs_you": hard,

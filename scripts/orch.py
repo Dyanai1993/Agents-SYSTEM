@@ -23,6 +23,8 @@ sub = ap.add_subparsers(dest="cmd", required=True)
 s = sub.add_parser("submit"); s.add_argument("task_id"); s.add_argument("--request"); s.add_argument("--goal")
 s.add_argument("--criteria", action="append", default=[]); s.add_argument("--constraint", action="append", default=[])
 s.add_argument("--target-repo"); s.add_argument("--priority", type=int, default=5)
+s.add_argument("--branch", help="branch of --target-repo to start from (default: the checked-out one)")
+s.add_argument("--no-repo", action="store_true", help="no repository: an empty start, patch files only")
 r = sub.add_parser("run-next"); r.add_argument("--backend", default="cli", choices=["cli"])   # sdk builds no tool log
 for n in ("worker", "assistant"):              # "assistant" = the old name of the worker
     x = sub.add_parser(n); x.add_argument("--backend", default="cli", choices=["cli"])
@@ -44,8 +46,20 @@ if a.cmd == "submit":
     req = None
     if a.goal:
         req = {"goal": a.goal, "constraints": a.constraint, "acceptance_criteria": a.criteria, "risks": [], "unknowns": []}
-    e = orchestrator.submit(a.task_id, request_text=a.request, requirements=req, target_repo=a.target_repo, priority=a.priority)
-    print("queued:", e["task_id"])
+    repo, ref = a.target_repo, a.branch
+    if orchestrator.load_entry(a.task_id):
+        sys.exit(f"task {a.task_id} already exists")      # before creating anything: no orphan repository
+    if repo:
+        try:
+            repo, ref, _ = orchestrator.project_check(repo, ref)
+        except ValueError as err:
+            sys.exit(f"--target-repo: {err}")
+    elif not a.no_repo:                          # every new task gets its own new repository, unless told otherwise
+        from agentsys import tasks
+        title = tasks.short_title((req or {}).get("goal") or a.request or a.task_id)
+        repo, ref = orchestrator.create_project_repo(a.task_id, title, (req or {}).get("goal") or a.request or ""), "main"
+    e = orchestrator.submit(a.task_id, request_text=a.request, requirements=req, target_repo=repo, priority=a.priority, base_ref=ref)
+    print("queued:", e["task_id"] + (f" - builds in {repo} ({ref})" if repo else " - no repository: patch files only"))
 elif a.cmd == "run-next":
     try:
         billing_guard.run_guard()

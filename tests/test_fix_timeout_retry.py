@@ -139,13 +139,19 @@ class RetryTests(TmpHome):
         def dev(prompt):
             (self.home / "tasks/t1/workspace/app.py").write_text("print('hi')\n")
             return DEV
-        orchestrator.submit("t1", requirements=REQ, target_repo=self.home / "does-not-exist")
+        import shutil, subprocess
+        repo = self.home / "target"; repo.mkdir()
+        for cmd in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", *cmd], cwd=repo, capture_output=True)
+        orchestrator.submit("t1", requirements=REQ, target_repo=repo)
         f = fb(developer=dev)
         self.assertEqual(proc("t1", f)["status"], "waiting_approval")
         first_approval = approvals.pending()[0]["id"]
         approvals.decide(first_approval, "approved")
+        shutil.rmtree(repo, ignore_errors=True)             # the repository is gone by delivery time
         e = proc("t1", f)
-        self.assertEqual(e["status"], "blocked"); self.assertIn("does not exist", e["note"])
+        self.assertEqual(e["status"], "blocked")     # Windows may leave the emptied folder behind: either reason is right
+        self.assertRegex(e["note"], "delivery failed: .*(does not exist|not a git repository)")
         orchestrator.retry("t1", answer="use argparse")
         f2 = fb()
         e2 = proc("t1", f2)

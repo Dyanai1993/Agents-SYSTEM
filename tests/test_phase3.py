@@ -182,20 +182,22 @@ class OrchestratorTests(TmpHome):
         self.assertEqual((repo / "README").read_text(), "dirty")
 
     def test_missing_target_repo_blocks_cleanly_instead_of_crashing(self):
+        """The project repository is checked when the task STARTS (it is copied into the workspace), so a wrong path
+        blocks before any agent call is spent - not after all the work, at delivery."""
         missing = self.home / "does-not-exist"
         orchestrator.submit("t1", requirements=REQ, target_repo=missing)
         f = fb(developer=self.dev_writes("t1"))
-        proc("t1", f); approvals.decide(approvals.pending()[0]["id"], "approved")
         e = proc("t1", f)
         self.assertEqual(e["status"], "blocked"); self.assertIn("does not exist", e["note"])
+        self.assertEqual(f.calls, [])
 
     def test_target_path_that_is_not_a_git_repo_blocks_cleanly(self):
         not_git = self.home / "plain-folder"; not_git.mkdir()
         orchestrator.submit("t1", requirements=REQ, target_repo=not_git)
         f = fb(developer=self.dev_writes("t1"))
-        proc("t1", f); approvals.decide(approvals.pending()[0]["id"], "approved")
         e = proc("t1", f)
         self.assertEqual(e["status"], "blocked"); self.assertIn("not a git repository", e["note"])
+        self.assertEqual(f.calls, [])
 
     def test_a_foreign_branch_of_the_same_name_is_never_deleted(self):
         """Review (third round): deliver() used to delete ANY existing branch of that name, with no proof
@@ -332,7 +334,8 @@ class OrchestratorTests(TmpHome):
         repo = self.home / "target"; repo.mkdir()
         git(repo, "init", "-q", "-b", "main"); (repo / "app.py").write_text("conflict\n"); git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init")
         orchestrator.submit("t1", requirements=REQ, target_repo=repo)
-        f = fb(developer=self.dev_writes("t1"))
+        loop.ensure_workspace(self.home / "tasks/t1")       # a task whose workspace did NOT start from the repo (an older task):
+        f = fb(developer=self.dev_writes("t1"))              # its new app.py conflicts with the repo's app.py
         proc("t1", f)
         approvals.decide(approvals.pending()[0]["id"], "approved")
         e = proc("t1", f)

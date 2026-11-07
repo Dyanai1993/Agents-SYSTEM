@@ -138,3 +138,13 @@ The Approvals list shows only the latest request per task and gate (an older one
   receipt (queue entry `delivery`) holds the patch names, folder, branch, commit, approval id and time.
 - `loop._git` (and every other subprocess call) decodes output as UTF-8 with `core.quotepath=false`: the Windows code
   page raised UnicodeDecodeError on a Hebrew diff or file name.
+
+## Project repositories (after the master prompt)
+- Every new task gets a new local git repository (`orchestrator.create_project_repo`, in `config.projects_dir()`:
+  `AGENTSYS_PROJECTS`, else `<AGENTSYS_HOME>/projects` when a separate data folder is used (tests, demos), else
+  `~/Projects`), unless an existing one is chosen (`project_check` validates: absolute path, a git repo, a commit at the
+  branch, a branch name that is not an option). Created on submit; the path is journaled so a retried submit reuses it.
+- At the first run the workspace starts as a copy of that commit (`git archive`, tracked files only, safe extraction);
+  `project_base` records repo, ref and sha. The agents never touch the repository itself.
+- Delivery creates `agentsys/<task>` in the repository from `project_base.sha`, so the patches (only the task's own
+  commits) apply even if the repository moved on. Nothing is merged or pushed.

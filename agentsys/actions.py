@@ -58,6 +58,14 @@ def handle_post(path, body, headers):
                 return 404, {"error": str(e).strip("'\"")}
         if path in ("/api/task/run", "/api/task/answer"):
             return _task_action(path, body)
+        if path == "/api/task/project":
+            try:
+                e = orchestrator.set_project(str(body.get("task_id", "")), body.get("repo"), body.get("ref"))
+                return 200, {"task_id": e["task_id"], "repo": e.get("target_repo"), "ref": e.get("base_ref")}
+            except orchestrator.TaskBusy as e:
+                return 409, {"error": f"{e}: wait until the current run ends"}
+            except KeyError as e:
+                return 404, {"error": str(e).strip("'\"")}
         if path == "/api/task/requirement":
             try:
                 e = orchestrator.edit_requirement(str(body.get("task_id", "")), body.get("requirement"))
@@ -130,6 +138,9 @@ def _assistant(path, body):
         if path == "/api/assistant/retry":
             s = assistant.retry_turn(sid)
             return 200, {"session": sid, "status": s["turn"]["status"]}
+        if path == "/api/assistant/project":
+            s = assistant.set_project(sid, body.get("repo"), body.get("ref"))
+            return 200, {"session": sid, "project": s.get("project")}
         if path == "/api/assistant/submit":
             task_id, new = assistant.submit(sid, _int(body.get("revision")))
             return 200, {"session": sid, "task_id": task_id, "new": new}
