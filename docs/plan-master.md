@@ -53,10 +53,10 @@ Still open:
 ## Benchmark plan: raise the quality bar using T-0026 (owner's brief, 2026-11-07)
 T-0026 (the FirstWords shell) is the benchmark; the delivered project stays read-only; regressions use isolated
 fixtures; FakeBackend proves wiring, not model quality; any live comparison needs explicit quota authorization.
-- [ ] Phase 1 - handoffs and playbooks: Assistant/intake, Architect, Developer, Tester, Security prompts; UI design
+- [x] Phase 1 - handoffs and playbooks: Assistant/intake, Architect, Developer, Tester, Security prompts; UI design
       and testing procedures; a conditional PWA-reliability playbook; stage-aware selection (plan / build / test /
       FINAL); playbooks in the review document and the build id. Verified on real role payloads incl. FINAL.
-- [ ] Phase 2 - tester evidence: an unrelated command, a grep of a test name or an aggregate count cannot prove a
+- [x] Phase 2 - tester evidence: an unrelated command, a grep of a test name or an aggregate count cannot prove a
       separate criterion; expected-failure and batched checks with distinct output still pass.
 - [ ] Phase 3 - PWA benchmark fixtures + browser checks: broken B while A is verified; corrupt asset while the
       manifest says A; ready marker with a missing cache; real keyboard download / failure / retry / theme + focus.
