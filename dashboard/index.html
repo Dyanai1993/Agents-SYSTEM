@@ -66,6 +66,10 @@ button.primary:disabled{opacity:.45;cursor:default}
 .term .ok{color:#4ade80}.term .bad{color:#f87171}.term .say{color:#94a3b8}.term .end{color:#a5b4fc}
 .livechip{display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-left:8px;color:var(--mut)}
 .livechip i{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 1.4s ease-in-out infinite}
+#pvhost{max-width:1200px;margin:12px auto 0;padding:0 16px}
+#pvhost .card{margin-bottom:0}.pvbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#pvhost iframe{display:block;margin:10px auto 0;border:1px solid var(--line);border-radius:16px;background:#fff;height:72vh;width:390px;max-width:100%}
+#pvhost iframe.full{width:100%;border-radius:10px}
 pre.diff{max-height:60vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;white-space:pre;word-break:normal}
 pre.diff .add{color:var(--ok)}pre.diff .del{color:var(--bad)}pre.diff .hunk{color:var(--acc)}pre.diff .file{font-weight:700}
 code{font-size:12px;overflow-wrap:anywhere}
@@ -98,6 +102,7 @@ button.chip{cursor:pointer}button.chip:hover{background:color-mix(in srgb,var(--
 <nav><button data-v="assistant">New task</button><button data-v="overview" class="on">Overview</button><button data-v="activity">Activity</button><button data-v="messages">Messages</button><button data-v="task">Task monitor</button><button data-v="quality">Quality</button><button data-v="approvals">Approvals <span id="badge" class="pill warn" style="display:none"></span></button><button data-v="usage">Usage</button><button data-v="learning">Learning</button><button data-v="alerts">Alerts</button></nav>
 <span class="mut" id="stamp"></span>
 <div id="wbar" class="wbar" role="status" aria-live="polite"></div></header>
+<div id="pvhost" hidden></div>
 <main id="m"></main>
 <script>
 "use strict";
@@ -351,6 +356,41 @@ function pipelineCard(t){
   c.append(pipe);
   if(!planned&&!items.length)c.append(el("div",{class:"mut small",style:"margin-top:6px"},"The work items appear here once the Architect's plan is accepted."));
   return c;}
+// Preview: what the task built, served from its OWN local port (another origin: the app cannot touch the dashboard).
+// The frame lives in #pvhost, outside the 2.5 s re-render, so the app is not reloaded on every refresh.
+const pvHost=document.getElementById("pvhost"),pvState={url:null,task:null,full:false,closed:{}};
+function syncPreview(id,pv){
+  const url=id&&view==="task"&&pv&&pv.url&&!pvState.closed[id]?pv.url:null;
+  if(!url){pvHost.hidden=true;if(pvState.url){pvHost.replaceChildren();pvState.url=null;pvState.task=null;}return;}
+  pvHost.hidden=false;
+  if(pvState.url===url&&pvState.task===id)return;            // the same app: keep the frame, no reload
+  pvState.url=url;pvState.task=id;
+  const frame=el("iframe",{src:url,title:"Preview of "+id,class:pvState.full?"full":""});
+  const size=el("button",{class:"small"},pvState.full?"Phone width":"Full width");
+  size.onclick=()=>{pvState.full=!pvState.full;frame.className=pvState.full?"full":"";size.textContent=pvState.full?"Phone width":"Full width";};
+  const reload=el("button",{class:"small"},"Reload");reload.onclick=()=>{frame.src=url;};
+  const open=el("a",{href:url,target:"_blank",rel:"noopener"},el("button",{class:"small primary"},"Open in a new tab"));
+  const close=el("button",{class:"small"},"Hide");close.onclick=()=>{pvState.closed[id]=true;syncPreview(null,null);tick();};
+  pvHost.replaceChildren(el("div",{class:"card"},el("div",{class:"pvbar"},el("b",{},"Preview: "+id),el("code",{},url),size,reload,open,close),frame));}
+function previewCard(id,pv){
+  if(!pv||!pv.site){syncPreview(null,null);return null;}
+  const s=pv.site,b=pv.build||{},c=el("div",{class:"card",id:"preview"},el("b",{},"Try the result"));
+  const send=async(action,ok)=>{if(action!=="stop")delete pvState.closed[id];const x=await post("/api/preview",{task_id:id,action});taskNote=x.ok?{cls:"ok",text:ok}:{cls:"bad",text:x.body.error};tick();};
+  const btn=(label,fn,cls)=>{const x=el("button",{class:cls||"",style:"margin:6px 6px 0 0"},label);x.onclick=async()=>{x.disabled=true;await fn();};return x;};
+  const row=el("div",{});
+  if(pv.url&&!pvState.closed[id])row.append(el("span",{class:"ok"},"Shown at the top of the page. "),btn("Stop the preview",()=>send("stop","Preview stopped.")));
+  else if(pv.url)row.append(btn("Show the preview",async()=>{delete pvState.closed[id];tick();},"primary"),btn("Stop the preview",()=>send("stop","Preview stopped.")));
+  else if(s.root)row.append(btn("Preview the app",()=>send("start","Preview started: it is shown at the top of the page."),"primary"));
+  if(s.can_build)row.append(btn(b.state==="running"?"Building...":"Build again",()=>send("build","Build started: it runs the project's own build script."),s.root?"":"primary"));
+  c.append(row);
+  const info=[];
+  if(s.root)info.push("Shows "+(s.app_dir?"the last build ("+s.root.replace(/^.*[\/]workspace[\/]/,"")+")":s.entry)+(s.built_at?", made "+ago((Date.now()/1000-s.built_at)/60):""));
+  else info.push("Not built yet: press Build again.");
+  if(s.can_build&&!s.has_deps)info.push("The dependencies are not installed: run npm install in "+s.app_dir+".");
+  c.append(el("div",{class:"mut small",style:"margin-top:6px"},info.join(" ")+" The app runs from its own local address, apart from the dashboard; Build again runs the project's own build script on this computer."));
+  if(b.state&&b.state!=="running")c.append(el("details",{style:"margin-top:6px"},el("summary",{class:b.state==="ok"?"ok":"bad"},"Last build: "+(b.state==="ok"?"succeeded":"failed")+" "+ago((Date.now()/1000-b.at)/60)),el("pre",{},b.tail||"")));
+  syncPreview(id,pv);
+  return c;}
 // The terminal itself: one line per streamed step. Shared by the Task monitor and the Overview's "Now running" card.
 function termView(lines,taskId,extra){
   const term=el("div",{class:"term",role:"log","aria-live":"polite","aria-label":"Live agent activity","data-task":taskId,"data-n":String(lines.length)+(lines.length?lines[lines.length-1].ts:""),style:extra||""});
@@ -532,6 +572,7 @@ async function task(){
   const o=await get("/api/overview");
   if(!curTask&&o.tasks.length)curTask=o.tasks[o.tasks.length-1].task_id;   // the newest task
   const t=curTask?await get("/api/task?id="+encodeURIComponent(curTask)):null;   // fetch BEFORE clearing: no blank flash on refresh
+  const pv=t&&!t.error?await get("/api/preview?id="+encodeURIComponent(curTask)):null;   // what the task built, viewable?
   const wantsReview=t&&!t.error&&(t.state.state==="review"||(t.run&&["waiting_approval","done","rejected"].includes(t.run.status)));
   const rv=wantsReview?await get("/api/review?id="+encodeURIComponent(curTask)):null;
   const fs=saveFocus();   // the answer box keeps your typing, focus and cursor across the refresh
@@ -555,6 +596,7 @@ async function task(){
   m.append(flow);
   if(t.attention)m.append(el("div",{class:"card alert",style:t.attention.level==="warn"?"border-color:var(--warn)":""},el("b",{},"Needs you: "),t.attention.text));
   m.append(ctl);                    // what is happening and the next action, before the details
+  const pc=previewCard(t.task_id,pv);if(pc)m.append(pc);
   const lt=liveCard(t);if(lt)m.append(lt);
   if(rv&&!rv.error)m.append(reviewCard(rv));
   m.append(requirementCard(t));
@@ -673,7 +715,7 @@ function renderWorker(w){workerState=w;const b=document.getElementById("wbar");b
 function liveJob(id){return (workerState.processes||[]).find(p=>p.alive&&p.job&&p.job.kind==="task"&&p.job.id===id);}
 function workerOffline(){return !(workerState.processes||[]).some(p=>p.alive&&p.kind==="worker");}
 function go(v){view=v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x.dataset.v===v));m.replaceChildren();tick();}
-async function tick(auto){try{const [ap,w]=await Promise.all([get("/api/approvals"),get("/api/worker")]);renderWorker(w);const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view](auto);document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
+async function tick(auto){try{const [ap,w]=await Promise.all([get("/api/approvals"),get("/api/worker")]);renderWorker(w);const bd=document.getElementById("badge");bd.style.display=ap.pending.length?"inline":"none";bd.textContent=ap.pending.length;await views[view](auto);if(view!=="task")syncPreview(null,null);document.getElementById("stamp").textContent="updated "+new Date().toLocaleTimeString();}catch(e){document.getElementById("stamp").textContent="error: "+e.message;}}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));m.replaceChildren();tick();});
 // A rebuild closes an open native dropdown (seen: the task picker shut after a second): hold the refresh while a
 // dropdown is in use - from focus/click until you pick, leave it, or 15 s pass.

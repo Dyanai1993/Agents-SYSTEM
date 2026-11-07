@@ -58,6 +58,12 @@ def handle_post(path, body, headers):
                 return 404, {"error": str(e).strip("'\"")}
         if path in ("/api/task/run", "/api/task/answer"):
             return _task_action(path, body)
+        if path == "/api/preview":
+            from . import preview
+            act, tid = body.get("action"), str(body.get("task_id", ""))
+            if act not in ("start", "stop", "build"):
+                return 400, {"error": "action must be start, stop or build"}
+            return 200, {"start": preview.start, "stop": preview.stop, "build": preview.build}[act](logger.safe_task_id(tid))
         if path == "/api/task/project":
             try:
                 e = orchestrator.set_project(str(body.get("task_id", "")), body.get("repo"), body.get("ref"))

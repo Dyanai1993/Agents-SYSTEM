@@ -26,7 +26,8 @@ class H(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'",
+            "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; "
+            "frame-src http://127.0.0.1:*",          # the Preview card shows the task's app from its own local port
         )
         self.end_headers()
         self.wfile.write(b)
@@ -42,6 +43,9 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/review":
                 v = d.review_view(q.get("id", ""))
                 return self._send(200 if v else 404, v or {"error": "no merge review for this task yet"})
+            if u.path == "/api/preview":
+                from agentsys import preview
+                return self._send(200, preview.status(q.get("id", "")))
             if u.path == "/api/worker":
                 return self._send(200, worker.status(server_build=SERVER_BUILD))
             if u.path == "/api/events":
