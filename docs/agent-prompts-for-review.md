@@ -1565,7 +1565,10 @@ def _squash(text: str) -> str:
     path never equals the real one. Both sides are masked the same way: the numbers and words
     around the path must still match, the path itself does not.
     """
-    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", text or ""))
+    return re.sub(r"\s+", "", _PATH_TOKEN.sub(" <P> ", _ANSI.sub("", text or "")))
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")     # colour codes: never part of what an agent quotes
 
 
 MIN_SHARE = 0.75

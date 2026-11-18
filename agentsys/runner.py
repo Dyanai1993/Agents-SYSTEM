@@ -52,18 +52,42 @@ def looks_like_limit(text: str) -> bool:
     return bool(_LIMIT_PAT.search(text or ""))
 
 
-def _cap_output(text, limit=4000):
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+def _cap_output(text, limit=30000):
     """Review (fourth round): truncating to the first `limit` characters silently dropped real evidence
     that sits at the END of a long tool output - e.g. unittest's own summary line ("Ran 50 tests ... OK"),
     printed after all the per-test output, was simply gone past 4000 characters. semantics.evidence_errors()
     then had nothing to match an honest, accurate quote against, and rejected a correct report as if it
     were fabricated. Keeping head AND tail (half the budget each) means a long run's final summary survives
-    truncation just as reliably as its first lines do."""
-    text = str(text or "")
+    truncation just as reliably as its first lines do.
+
+    Seen live (T-0027): a 4000-character budget still cut the MIDDLE of vitest's verbose list - a third of it
+    colour codes - and five honest quotes of test names were rejected as unmatched. The recorder must keep at
+    least what the agent itself saw: Claude Code's Bash tool shows the agent up to 30,000 characters. Colour
+    codes are dropped first (no agent quotes them). The log is only checked and stored, never sent to a model."""
+    text = _ANSI.sub("", str(text or ""))
     if len(text) <= limit:
         return text
     half = limit // 2
     return text[:half] + "\n...[truncated]...\n" + text[-half:]
+
+
+def _drop_unattributed_passes(report):
+    """Seen live (T-0027): on the Tester's last try, ONE passing check that named no criterion made the whole report
+    schema-invalid and the task blocked. A PASSING check that names no criterion counts toward nothing - coverage and
+    the verdict come only from attributed checks - so it is dropped (and logged). A failing, skipped or unverified
+    check with no criterion is kept, so the schema still rejects it: a failure or a gap must say what it is about.
+    Returns the dropped names; changes nothing when every check would be dropped."""
+    if not isinstance(report, dict) or not isinstance(report.get("checks"), list):
+        return []
+    keep = [c for c in report["checks"] if not (isinstance(c, dict) and c.get("result") == "pass" and c.get("criterion_ids") == [])]
+    dropped = [str(c.get("name", ""))[:120] for c in report["checks"] if c not in keep]
+    if dropped and keep:
+        report["checks"] = keep
+        return dropped
+    return []
 
 
 def extract_json(text: str):
@@ -566,11 +590,16 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
     if spec["schema"]:
         try:
             res.output = extract_json(res.text)
+            if spec["schema"] == "test_report":
+                dropped = _drop_unattributed_passes(res.output)
+                if dropped:
+                    log("decision", f"{role}: dropped {len(dropped)} passing check(s) that named no criterion (they count "
+                        f"toward nothing): {'; '.join(dropped)[:200]}", payload={"dropped": dropped})
             schema.validate(spec["schema"], res.output)
         except (ValueError, schema.SchemaError) as e:
             res.ok, res.error = False, f"schema_validation: {e}"
             log("error", f"{role} output failed schema '{spec['schema']}'", status="error", tokens_estimate=tokens,
-                payload={"error": str(e), "text": res.text[:4000]})
+                payload={"error": str(e), "text": res.text[:60000]})   # T-0027: a 4000-character copy hid the cause
             return res
     else:
         try:

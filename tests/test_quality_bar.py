@@ -195,3 +195,55 @@ class FirstUseLoopTests(TmpHome):
         r = loop.run_task("t1", req, backend=fb, env={}, settings_paths=[])
         self.assertEqual(r["status"], "ready_for_review", r["message"])
         self.assertEqual([c["role"] for c in fb.calls].count("tester"), 3)     # item (rejected + redo) + final
+
+
+# ------------------------------------------------------------------ seen live: T-0027 (Task A, offline recovery)
+def _vitest_verbose(n=120, middle="on a corrupted file deletes only its own stage cache"):
+    """A colour-coded `vitest --reporter=verbose` list like T-0027's, with the quoted test in the middle."""
+    row = "\x1b[32m\u2713\x1b[39m src/offline/{f}.test.ts\x1b[2m > \x1b[22m{s}\x1b[2m > \x1b[22m{t}\x1b[33m 12\x1b[2mms\x1b[22m\x1b[39m"
+    rows = [row.format(f="update", s="checkForUpdate", t=f"keeps the active cache in case {i}") for i in range(n)]
+    rows.insert(n // 2, row.format(f="download", s="downloadAll", t=middle))
+    return "\n".join(rows) + "\n\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m121 passed\x1b[39m\x1b[22m"
+
+
+class LiveT0027Tests(TmpHome):
+    def test_an_honest_quote_from_the_middle_of_a_long_colour_coded_run_is_accepted(self):
+        """T-0027: the recorder kept only 4000 characters (head + tail) of vitest's verbose list, so five honest quotes
+        of test names in the middle were rejected as unmatched and the task blocked. The recorder now drops colour codes
+        and keeps what the agent itself saw (up to 30,000 characters)."""
+        from agentsys import runner
+        cmd = "npx vitest run --reporter=verbose"
+        ev = "\u2713 src/offline/download.test.ts > downloadAll > on a corrupted file deletes only its own stage cache"
+        check = [_check("corrupt file keeps the active cache", "pass", ["W1.1"], command=cmd, evidence=ev)]
+        raw = _vitest_verbose()
+        self.assertGreater(len(raw), 12000)
+        now = [{"tool": "Bash", "command": cmd, "output": runner._cap_output(raw)}]
+        self.assertEqual(errs(check, now), [])
+        old = [{"tool": "Bash", "command": cmd, "output": runner._cap_output(raw, limit=4000)}]
+        self.assertTrue(errs(check, old))           # the old budget really did lose it: this test can fail
+
+    def test_a_passing_check_with_no_criterion_is_dropped_not_a_block(self):
+        """T-0027: on the Tester's last try one passing check named no criterion; the whole report failed the schema."""
+        from agentsys import loop, runner, dashboard_data as dd
+        from tests.helpers import DEV, REQ, plan, report as rep, t_pass, _item
+
+        def with_stray(prompt):
+            _, ids, _ = _item(prompt)
+            return rep("pass", [_check("all", "pass", ids), _check("typecheck", "pass", [])])
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": [with_stray, t_pass]})
+        r = loop.run_task("t1", REQ, backend=fb, env={}, settings_paths=[])
+        self.assertEqual(r["status"], "ready_for_review", r["message"])
+        self.assertEqual([c["role"] for c in fb.calls].count("tester"), 2)          # item + final: no redo needed
+        self.assertTrue([e for e in dd.all_events("t1")[0] if "named no criterion" in e["summary"]])
+
+    def test_a_failing_check_with_no_criterion_is_still_rejected(self):
+        from agentsys import loop, runner
+        from tests.helpers import DEV, REQ, plan, report as rep, t_pass, _item
+
+        def unattributed_failure(prompt):
+            _, ids, _ = _item(prompt)
+            return rep("fail", [_check("all", "pass", ids), _check("broken thing", "fail", [])])
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": [unattributed_failure, t_pass, t_pass]})
+        r = loop.run_task("t1", REQ, backend=fb, env={}, settings_paths=[])
+        self.assertEqual(r["status"], "ready_for_review", r["message"])
+        self.assertEqual([c["role"] for c in fb.calls].count("tester"), 3)          # rejected, one redo, then final
