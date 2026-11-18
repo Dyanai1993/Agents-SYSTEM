@@ -247,3 +247,17 @@ class LiveT0027Tests(TmpHome):
         r = loop.run_task("t1", REQ, backend=fb, env={}, settings_paths=[])
         self.assertEqual(r["status"], "ready_for_review", r["message"])
         self.assertEqual([c["role"] for c in fb.calls].count("tester"), 3)          # rejected, one redo, then final
+
+    def test_a_search_may_prove_the_source_part_of_a_compound_criterion(self):
+        """T-0027 W2.5 mixes build, source and screen: a git diff proves 'no CSS file changed', so the on-screen words
+        must not refuse it. An echoed marker ('cssdiff_done') is still no evidence, and a grep still cannot prove a
+        criterion that names no source artefact."""
+        w25 = {"W2.5": "`npm test`, `npm run typecheck` and `npm run build` pass; styles use only existing tokens and no CSS "
+                       "files other than the existing ones change values, and the e2e at 390px shows no horizontal scroll"}
+        cmd = "git diff --quiet 152f5ce -- '*.css'; echo \"css_diff_exit=$?\""
+        ok = [{"tool": "Bash", "command": cmd, "output": "css_diff_exit=0"}]
+        self.assertEqual(errs([_check("CSS files unchanged", "pass", ["W2.5"], command=cmd, evidence="css_diff_exit=0")], ok, w25), [])
+        marker = "git diff 152f5ce --stat -- '*.css' | tail -3; echo cssdiff_done"
+        bad = [{"tool": "Bash", "command": marker, "output": "cssdiff_done"}]
+        e = errs([_check("CSS files unchanged", "pass", ["W2.5"], command=marker, evidence="cssdiff_done")], bad, w25)
+        self.assertTrue(any("echoed itself" in x for x in e), e)

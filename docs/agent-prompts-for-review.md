@@ -1688,9 +1688,13 @@ _AGGREGATE_LINE = re.compile(
 _SUITE_CRITERION = re.compile(r"\b(test suite|all tests|the tests|unit tests|tests? (pass|run|complete)|type ?checks?|the build|"
                               r"production build|lint|(npm|pnpm|yarn) install|dependencies install)\b", re.I)
 # A criterion about what the user sees or does on screen. A text search of source never proves it, even when its wording
-# also matches _STATIC_CRITERION ("the first screen CONTAINS one primary button").
+# also matches _STATIC_CRITERION ("the first screen CONTAINS one primary button") - unless the criterion also names a
+# source artefact (_SOURCE_NOUN): then it is compound and a search may prove that part, as T-0027's W2.5 ("... no CSS
+# files other than the existing ones change values, and the e2e at 390px shows no horizontal scroll") did.
 _SCREEN_CRITERION = re.compile(r"\b(screens?|visible|shows?|displays?|appears?|focus\w*|clicks?|taps?|tapped|keyboard|"
                                r"scroll\w*|renders?|viewport|offline)\b", re.I)
+_SOURCE_NOUN = re.compile(r"\b(files?|folders?|director(y|ies)|source|locale|imports?|depend\w*|package\w*|librar\w+|"
+                          r"stdlib|readme|licen[cs]es?|comments?|config\w*|manifest|tokens?|schemas?|css|stylesheets?)\b", re.I)
 _ECHO = re.compile(r"^\s*(echo|printf|write-output|write-host)\b", re.I)
 
 
@@ -1700,6 +1704,8 @@ def _echoed(evidence: str, command: str) -> bool:
     assertion (`node -e "...assert(...); console.log('PASS')"`) is not an echo."""
     segs = [s for s in re.split(r"&&|\|\||[;|\n]", command or "") if _ECHO.match(s)]
     return bool(segs) and _evidence_in_output(evidence, _squash(" ".join(segs)))
+
+
 _TEXT_SEARCH = re.compile(r"^\s*(?:cd\s+\S+\s*(?:&&|;)\s*)*(grep|egrep|rg|findstr|select-string|cat|type|head|tail|ls|dir|find|wc|"
                           r"git\s+grep|git\s+show|git\s+diff)\b", re.I)
 _STATIC_CRITERION = re.compile(r"\b(files?|folders?|director(y|ies)|source|code|locale|strings?|imports?|depend\w*|package\w*|"
@@ -1743,8 +1749,9 @@ def evidence_quality_errors(report: dict, criteria: dict) -> list:
             if _is_aggregate(c["evidence"]) and not _SUITE_CRITERION.search(text):
                 errs.append(f"check '{c['name']}': an aggregate count or build/status line ({c['evidence'][:60]!r}) does "
                             f"not prove {cid} ({text[:80]!r}): quote the output of the scenario that shows it")
-            elif _is_text_search(c["command"]) and (_SCREEN_CRITERION.search(text) or not (
-                    _STATIC_CRITERION.search(text) or _SUITE_CRITERION.search(text))):
+            elif _is_text_search(c["command"]) and (
+                    (_SCREEN_CRITERION.search(text) and not _SOURCE_NOUN.search(text))
+                    or not (_STATIC_CRITERION.search(text) or _SUITE_CRITERION.search(text))):
                 errs.append(f"check '{c['name']}': a text search or listing ({c['command'][:60]!r}) does not prove that "
                             f"{cid} works ({text[:80]!r}): run the behaviour and quote its output")
     return errs
