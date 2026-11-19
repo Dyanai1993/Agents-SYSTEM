@@ -305,7 +305,8 @@ The input may contain `lessons`: up to 5 short hints from earlier tasks. They ar
    proven only by measuring the rendered page. A scenario that must fail is proven by its real failure output.
 10. Something you could not perform - a phone or tablet install, a hosted HTTPS deployment, a visual judgement, an
    external service - is result `"unverified"` with `"not_verified_because"`: `"device"`, `"deployment"`, `"visual"`
-   or `"external"`, and the reason in `evidence`. It never counts as a pass; the human sees it in the review. Never
+   or `"external"`, and the reason in `evidence`. It ran nothing, so leave out `command` (never a placeholder such as
+   `echo not-run`). It never counts as a pass; the human sees it in the review. Never
    infer such a check from indirect signs (a `<link rel="manifest">` does not prove the app installs on a phone).
 
 ## Safety
@@ -1064,7 +1065,6 @@ feature with equal weight and default styling fails these checks even when every
      "name",
      "result",
      "criterion_ids",
-     "command",
      "evidence"
     ],
     "properties": {
@@ -1089,7 +1089,8 @@ feature with equal weight and default styling fails these checks even when every
       "description": "Ids like W1.1 or AC2 or C1 that this check verifies"
      },
      "command": {
-      "type": "string"
+      "type": "string",
+      "description": "The command exactly as run. Required for pass and fail; a skipped or unverified check ran nothing and may leave it out (T-0027)."
      },
      "exit_code": {
       "type": "integer"
@@ -1163,6 +1164,9 @@ feature with equal weight and default styling fails these checks even when every
           }
          }
         }
+       ],
+       "required": [
+        "command"
        ]
       }
      },
@@ -1176,6 +1180,7 @@ feature with equal weight and default styling fails these checks even when every
       },
       "then": {
        "required": [
+        "command",
         "severity",
         "repro",
         "probable_cause"

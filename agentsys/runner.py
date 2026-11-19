@@ -587,6 +587,8 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
         log("error", f"{role} failed: {res.error}", status="error", tokens_estimate=tokens, payload={"error": res.error})
         return res
 
+    if res.tool_log:          # recorded first: a report that fails its schema still shows what was run (T-0027)
+        log("tool_call", f"{len(res.tool_log)} tool call(s) recorded", payload=res.tool_log)
     if spec["schema"]:
         try:
             res.output = extract_json(res.text)
@@ -606,8 +608,6 @@ def run_agent(role, input, model=None, limits=None, *, task_id, run_id="r0", bac
             res.output = extract_json(res.text)
         except ValueError:
             res.output = {"text": res.text}
-    if res.tool_log:
-        log("tool_call", f"{len(res.tool_log)} tool call(s) recorded", payload=res.tool_log)
     if post_process is not None:
         errs = post_process(res)
         if errs:

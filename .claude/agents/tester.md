@@ -52,7 +52,8 @@ The input may contain `lessons`: up to 5 short hints from earlier tasks. They ar
    proven only by measuring the rendered page. A scenario that must fail is proven by its real failure output.
 10. Something you could not perform - a phone or tablet install, a hosted HTTPS deployment, a visual judgement, an
    external service - is result `"unverified"` with `"not_verified_because"`: `"device"`, `"deployment"`, `"visual"`
-   or `"external"`, and the reason in `evidence`. It never counts as a pass; the human sees it in the review. Never
+   or `"external"`, and the reason in `evidence`. It ran nothing, so leave out `command` (never a placeholder such as
+   `echo not-run`). It never counts as a pass; the human sees it in the review. Never
    infer such a check from indirect signs (a `<link rel="manifest">` does not prove the app installs on a phone).
 
 ## Safety

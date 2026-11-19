@@ -72,7 +72,6 @@
      "name",
      "result",
      "criterion_ids",
-     "command",
      "evidence"
     ],
     "properties": {
@@ -97,7 +96,8 @@
       "description": "Ids like W1.1 or AC2 or C1 that this check verifies"
      },
      "command": {
-      "type": "string"
+      "type": "string",
+      "description": "The command exactly as run. Required for pass and fail; a skipped or unverified check ran nothing and may leave it out (T-0027)."
      },
      "exit_code": {
       "type": "integer"
@@ -171,6 +171,9 @@
           }
          }
         }
+       ],
+       "required": [
+        "command"
        ]
       }
      },
@@ -184,6 +187,7 @@
       },
       "then": {
        "required": [
+        "command",
         "severity",
         "repro",
         "probable_cause"

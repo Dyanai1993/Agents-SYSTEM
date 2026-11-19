@@ -261,3 +261,22 @@ class LiveT0027Tests(TmpHome):
         bad = [{"tool": "Bash", "command": marker, "output": "cssdiff_done"}]
         e = errs([_check("CSS files unchanged", "pass", ["W2.5"], command=marker, evidence="cssdiff_done")], bad, w25)
         self.assertTrue(any("echoed itself" in x for x in e), e)
+
+    def test_an_unverified_check_needs_no_command(self):
+        """T-0027 W2: both Tester reports were schema-invalid only because an honest 'unverified' check (no phone, no
+        hosted HTTPS; no screenshots compared) had no `command` - it ran nothing. Pass and fail still need one."""
+        from agentsys import loop, runner
+        from tests.helpers import DEV, REQ, plan, report as rep, _item
+        unv = {"name": "phone install and hosted HTTPS", "result": "unverified", "not_verified_because": "device",
+               "criterion_ids": ["W1.1"], "evidence": "no phone, tablet or hosted HTTPS environment here; not inferred"}
+        self.assertEqual(schema.errors_for("test_report", report("pass", [_check("all", "pass", ["W1.1"]), unv])), [])
+        no_cmd = {k: v for k, v in _check("all", "pass", ["W1.1"]).items() if k != "command"}
+        self.assertTrue(schema.errors_for("test_report", report("pass", [no_cmd])))
+
+        def honest(prompt):
+            _, ids, _ = _item(prompt)
+            return rep("pass", [_check("all", "pass", ids), dict(unv, criterion_ids=ids)])
+        fb = runner.FakeBackend({"architect": plan(1), "developer": DEV, "tester": [honest, honest]})
+        r = loop.run_task("t1", REQ, backend=fb, env={}, settings_paths=[])
+        self.assertEqual(r["status"], "ready_for_review", r["message"])
+        self.assertEqual([c["role"] for c in fb.calls].count("tester"), 2)          # item + final: no redo
